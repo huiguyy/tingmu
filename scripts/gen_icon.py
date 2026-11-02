@@ -32,22 +32,32 @@ def fit_font(draw, text, max_w, start_size):
 
 
 def draw_content(d, S, badge, mode):
-    """在透明画布上画白色「听幕」+ 徽章。mode: fg=彩色徽章, mono=剪影徽章"""
-    text = "听幕"
-    max_w = int(S * 0.62)
-    f, tb = fit_font(d, text, max_w, int(S * 0.46))
-    sw = max(2, int(S * 0.028))  # 描边加粗
-    cx, cy = S // 2, int(S * 0.46)
-    d.text((cx - (tb[2] - tb[0]) / 2 - tb[0], cy - (tb[3] - tb[1]) / 2 - tb[1]),
-           text, font=f, fill=WHITE, stroke_width=sw, stroke_fill=WHITE)
+    """v3 纯几何：白色字幕框（圆角矩形+小尾巴）+ 框内两条粗蓝杠 + 右下徽章。
+    不用文字——小尺寸下汉字渲染必糊；粗几何块在 48px 也分明。mode: fg=彩色徽章, mono=白色剪影"""
+    # 字幕框（白色）
+    bx, by = int(S * 0.18), int(S * 0.26)
+    bw, bh = int(S * 0.64), int(S * 0.42)
+    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(S * 0.07), fill=WHITE)
+    tail = int(S * 0.045)
+    d.polygon([(bx + int(S * 0.12), by + bh - 2),
+               (bx + int(S * 0.12) + tail * 2, by + bh - 2),
+               (bx + int(S * 0.12) + tail, by + bh + int(S * 0.10))], fill=WHITE)
+    # 框内两条粗字幕杠（蓝；mono 时为透明孔）
+    bar_fill = CLEAR if mode == "mono" else BLUE
+    for i, wfrac in enumerate((0.68, 0.44)):
+        lh = int(S * 0.10)  # 杠高 10%——48px 下约 5px，依然清晰
+        ly = by + int(bh * (0.24 + i * 0.40))
+        lx = bx + int(S * 0.08)
+        lw = int((bw - 2 * int(S * 0.08)) * wfrac)
+        d.rounded_rectangle([lx, ly, lx + lw, ly + lh], radius=lh // 2, fill=bar_fill)
     if badge:
-        br = int(S * 0.15)
-        bx, by = int(S * 0.68), int(S * 0.66)  # 保持在自适应安全区(中央 66%)内
-        d.ellipse([bx - br, by - br, bx + br, by + br], fill=WHITE)
+        br = int(S * 0.14)
+        cx, cy = int(S * 0.68), int(S * 0.66)  # 保持在自适应安全区(中央 66%)内
+        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=WHITE)
         bf = ImageFont.truetype(FONT, int(br * 1.25))
         bb = d.textbbox((0, 0), badge, font=bf)
         char_fill = CLEAR if mode == "mono" else BLUE
-        d.text((bx - (bb[2] - bb[0]) / 2 - bb[0], by - (bb[3] - bb[1]) / 2 - bb[1]),
+        d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
                badge, font=bf, fill=char_fill)
 
 
