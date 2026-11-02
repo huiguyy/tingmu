@@ -21,38 +21,43 @@ FONT = "/System/Library/Fonts/STHeiti Light.ttc"
 BADGE = {"fast": "快", "bilingual": "双", "base": None}
 
 
-def draw_logo(size: int, badge: str | None, rounded_bg: bool) -> Image.Image:
+def draw_logo(size: int, badge: str | None, rounded_bg: bool, monochrome: bool = False) -> Image.Image:
     S = size
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    r = int(S * 0.18)
-    if rounded_bg:
-        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=r, fill=BLUE)
-    else:
-        d.rectangle([0, 0, S - 1, S - 1], fill=BLUE)  # 自适应背景层全幅纯色
+    line_fill = WHITE if monochrome else BLUE
+    bubble_fill = WHITE
+    badge_text_fill = WHITE if monochrome else BLUE
+    if not monochrome:
+        r = int(S * 0.18)
+        if rounded_bg:
+            d.rounded_rectangle([0, 0, S - 1, S - 1], radius=r, fill=BLUE)
+        else:
+            d.rectangle([0, 0, S - 1, S - 1], fill=BLUE)  # 自适应背景层全幅纯色
     # 气泡（白色圆角矩形 + 尾巴），整体居中偏上
     bw, bh = int(S * 0.56), int(S * 0.36)
     bx, by = (S - bw) // 2, int(S * 0.24)
-    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(S * 0.07), fill=WHITE)
+    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(S * 0.07), fill=bubble_fill)
     tail = int(S * 0.05)
     d.polygon([(bx + int(S * 0.10), by + bh - 2),
                (bx + int(S * 0.10) + tail * 2, by + bh - 2),
-               (bx + int(S * 0.10) + tail, by + bh + int(S * 0.09))], fill=WHITE)
+               (bx + int(S * 0.10) + tail, by + bh + int(S * 0.09))], fill=bubble_fill)
     # 气泡内三条"字幕行"
     for i, wfrac in enumerate((0.66, 0.50, 0.32)):
         lw = int((bw - 2 * int(S * 0.07)) * wfrac)
         lh = max(3, int(S * 0.035))
         ly = by + int(bh * (0.22 + i * 0.28))
         lx = bx + int(S * 0.07)
-        d.rounded_rectangle([lx, ly, lx + lw, ly + lh], radius=lh // 2, fill=BLUE)
-    # 徽章：右下角白圆蓝框 + 字
+        d.rounded_rectangle([lx, ly, lx + lw, ly + lh], radius=lh // 2, fill=line_fill)
+    # 徽章：右下角圆 + 字（monochrome 下整体为白色剪影）
     if badge:
         br = int(S * 0.17)
         cx, cy = int(S * 0.66), int(S * 0.62)
-        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=WHITE, outline=BLUE, width=max(2, S // 128))
+        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=bubble_fill,
+                  outline=(0, 0, 0, 0) if monochrome else BLUE, width=max(2, S // 128))
         f = ImageFont.truetype(FONT, int(br * 1.15))
         tb = d.textbbox((0, 0), badge, font=f)
-        d.text((cx - (tb[2] - tb[0]) / 2 - tb[0], cy - (tb[3] - tb[1]) / 2 - tb[1]), badge, font=f, fill=BLUE)
+        d.text((cx - (tb[2] - tb[0]) / 2 - tb[0], cy - (tb[3] - tb[1]) / 2 - tb[1]), badge, font=f, fill=badge_text_fill)
     return img
 
 
@@ -72,12 +77,16 @@ def main():
     os.makedirs(ad, exist_ok=True)
     fg = draw_logo(432, badge, rounded_bg=False)  # 透明底， 内容在安全区内
     fg.save(os.path.join(ad, "ic_launcher_foreground.png"))
+    # monochrome 层：Android 13+ 主题图标用，白色剪影（气泡+徽章），避免被压成纯色块
+    mono = draw_logo(432, badge, rounded_bg=False, monochrome=True)
+    mono.save(os.path.join(ad, "ic_launcher_monochrome.png"))
     for n in ("ic_launcher", "ic_launcher_round"):
         with open(os.path.join(ad, f"{n}.xml"), "w") as f:
             f.write('<?xml version="1.0" encoding="utf-8"?>\n'
                     '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
                     '    <background android:drawable="@drawable/ic_launcher_background"/>\n'
                     '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
+                    '    <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>\n'
                     '</adaptive-icon>\n')
     dd = os.path.join(res, "drawable")
     os.makedirs(dd, exist_ok=True)
