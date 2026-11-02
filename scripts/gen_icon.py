@@ -72,7 +72,7 @@ def draw_logo(size, badge, mode):
     img = Image.new("RGBA", (S, S), CLEAR)
     d = ImageDraw.Draw(img)
     if mode == "legacy":
-        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=NAVY)  # v5 深黑蓝底
+        pass  # v6：去掉深色底，透明背景只留气泡+徽章（启动器显示=预览图）
     draw_content(d, S, badge, mode)
     return img
 
