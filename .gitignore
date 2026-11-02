@@ -1,0 +1,30 @@
+# 大文件与本地产物不入仓
+models/
+upstream/
+old-builds/
+*.apk
+*.tar.bz2
+
+# Android 构建产物
+android/Tingmu/build/
+android/Tingmu/.gradle/
+android/Tingmu/local.properties
+android/Tingmu/app/build/
+
+# 模型目录：构建时由 scripts/fetch-models.sh 下载到 ../../models，再由 build-apk.sh 拷入 assets
+android/Tingmu/app/src/main/assets/models/*
+!android/Tingmu/app/src/main/assets/models/.gitkeep
+!android/Tingmu/app/src/main/assets/models/silero_vad.onnx
+
+# 笔记里的日志与截图
+notes/*.log
+notes/shots/
+
+# bench 合成音频
+bench/audio/overlap_*.wav
+bench/audio/sequential_AB.wav
+bench/audio/selftest_pauses.wav
+bench/audio/mixed_zh_en.wav
+
+__pycache__/
+*.pyc
