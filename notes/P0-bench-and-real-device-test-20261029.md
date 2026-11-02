@@ -336,3 +336,27 @@ adb push /Users/yangyan/ZCodeProject/tingmu/models/ctc-zh-2025/tokens.txt       
 - 像素级验证： 气泡中心白、徽章区两版 icon 字节不同（双语 `656525855cbc` / 快速 `b451041b87a0`)
 - 重出包（aapt2 核对 vc10 / v1.0 / label / icon 均在内）： 双语版 165313342B sha `997109173b69f0ef`（arm64)； 快速版 76135616B sha `ec7fd21dade85d76`（arm64+v7a)； 均已 cp ~/Downloads/
 - **下一步（用户拍板）**： 上传 GitHub
+
+---
+
+## 十七、GitHub 发布（2026-11-02，用户拍板：公开仓库 + Releases 带 APK）
+
+- 仓库 **https://github.com/huiguyy/tingmu**（public，MIT LICENSE 代码；模型/AAR 许可各见上游）
+- 推送内容（44 文件， 97MB)： 源码 + res 图标 + AAR + vad + 构建脚本 + notes/docs + README； **排除 models/(629MB)、upstream/、old-builds/、*.apk、日志截图**（.gitignore 已写）
+- 新增 `scripts/fetch-models.sh`（从 sherpa-onnx 官方 release 拉 small-ctc-2025 / x-asr-480ms / silero_vad）； build-apk.sh 改为模型从 `models/` 来并自动 fetch
+- Release **v1.0** 挂两个 APK： `听幕-双语版.apk`(165313342B) / `听幕-快速版.apk`(76135616B)，下载品链接 `https://github.com/huiguyy/tingmu/releases/download/v1.0/听幕-双语版.apk` 等
+- 安全： 绝未推整个 ZCodeProject 工作区（内含交易网关/cookie 等敏感内容）， 只建了独立干净仓库
+
+**icon v5 + v1.1（2026-11-03，用户仍报"老logo"，指出"删掉重装不存在缓存"——技术上正确）**： 承认两点可能：①手机上打开的仍是旧文件 ②v4 白底蓝泡与 v1 蓝底白泡外形相似易误判。v5 彻底换配色：**深黑蓝底(#111827) + 蓝字幕泡 + 白杠 + 黄徽章黑字（快/双）**——48px 实测黑蓝68%/蓝泡15%/黄章4%，与 v1-v4 任何版本一眼可辨。版本升 **v1.1/vc11**，文件名自动带版本：`听幕-双语版-v1.1.apk` 165311039B sha `5eb943217ad98935` / `听幕-快速版-v1.1.apk` 76313928B sha `4b456fda83b2e7d5`；APK 内 icon 与设计稿 sha 一致(2d67ff2c…）；Downloads 只留 v1.1 两件+v5预览；GitHub 新建 Release v1.1；判据：**安装界面显示黑底黄徽章 = 新文件；蓝白泡 = 旧文件**。
+
+**icon v4.1 端到端复验（2026-11-02 晚）**： 模拟器装同源 x86_64 包 → 打开系统"应用信息"页抓系统渲染的大图标：**白底 48% + 品牌蓝 #0A6CFF 14% + 右下徽章区检出蓝圆(10,108,255)**，与预览一致（差异仅因截图裁切含页面底色）。确认：APK 纯 PNG 图标 + Android 系统渲染正确。手机侧若仍显旧图标 = 启动器缓存/旧包残留，需先卸载旧应用再装、必要时重启。
+
+**icon v4.1 纯 PNG（同一天，用户反馈"换了但和预览不一样"）**： 根因 = 自适应 icon 被启动器裁剪/缩放，预览（整块方图）≠ 手机渲染。修复： **删除 anydpi-v26 自适应 icon，只保留各密度整块 PNG**，manifest 只留 android:icon=@mipmap/ic_launcher。此后预览图直接取自 APK 内 icon，二者必然一致。重建 18:32： 双语 165297479B sha `091d98ddb58ce240` / 快速 76300404B sha `92d53085b58473b4`； APK 内无任何 anydpi 条目、icon sha 与 res 一致； Downloads 只留新三件； GitHub release 已 clobber、源码已 push。
+
+**icon v4 清场重建（同一天，用户要求"删掉旧的、只留新的、重新做"）**： 全删旧 apk/旧 res icon → gen_icon.py v4 **反色设计**（白底圆角方块 + 蓝色字幕气泡 + 泡内两条白粗杠 + 右下蓝徽章白字 快/双，与 v1/v3 蓝底白标一眼可辨）；48px 验证白底72%+蓝泡20%。重建： 双语 `听幕-双语版-v1.0.apk` 165310428B sha `220c33ba428723e0` / 快速 76312581B sha `5c6376594b9dcb9e`； APK 内 icon 与设计稿 sha 一致(7cc49b46…）； Downloads 只留新文件+预览； GitHub release 已 clobber、源码已 push。
+
+**icon v3 重设计（同一天，用户反馈 v2 两个字看不清）**： v2 文字型 logo 在 48px 下必糊（本模型无法看图，只做了像素统计，未把住"可辨"关）⇒ v3 改为**纯几何**：白色字幕框（圆角矩形+尾巴）+ 框内两条 10% 粗蓝杠 + 右下快/双徽章。48px 逐行验证：`WWW?BBBB…BBB WWW` 杠在框内清晰可辨。重建：双语 sha `46e3be98112b399b`(165312848B) / 快速 `d7200816f1363136`(76314677B)；预览 `~/Downloads/听幕-logo预览-v3.png`（v2 预览已删）；源码 push + release v1.0 附件已更新。
+
+**icon v2 重设计（同一天，用户拍板"logo 不行重新设计"）**： v1 气泡细线小尺寸糊 → v2 改为 **蓝底(#0A6CFF) + 中央白色粗体「听幕」+ 右下角徽章圆圈(快/双）**。理由：粗字小尺寸辨识度高；白字对蓝底 WCAG 对比度 4.56:1（v1 的 #0A84FF 只有 3.6:1，听障友好性不够，故加深）。monochrome 剪影层保留（主题图标）。像素验证：legacy 77%蓝+19%白字，mono 20%白色剪影；模拟器抽屉实测新蓝块内白字像素 1000+/格。重建：双语 sha `76af4cad460cd612`(165327328B) / 快速 `3d537f779fe5bd60`(76329093B)，已 cp ~/Downloads/、push 源码(06d22d7)、release v1.0 附件已 clobber 更新。
+
+**icon 补丁（同一天，用户真机报"logo 是空白图片"）**： APK 内 icon 资源像素验证其实非空（前景 432px 100% 不透明、78% 蓝），模拟器抽屉渲染也有蓝+白气泡； 真机空白最可能原因 = Android 13+ 主题图标（themed icons) 下 adaptive icon 缺 `<monochrome>` 层，前景整片不透明被压成纯色块，气泡看不见。修复： gen_icon.py 新增 monochrome 白色剪影层（气泡+徽章， 25% 覆盖率实测）并写入 adaptive XML； 重建两包（双语 sha `e17b6df99b2ac64f` / 快速 `d541444cef23497f`)、已 cp ~/Downloads/ 并 `gh release upload --clobber` 更新 v1.0 附件、源码已 push。另一种可能是用户看的是文件管理器里 APK 文件的空白缩略图（正常现象），安装后桌面图标才是真 logo。

@@ -13,7 +13,9 @@ import sys
 
 from PIL import Image, ImageDraw, ImageFont
 
-BLUE = (10, 108, 255, 255)  # #0A6CFF：白字对比度 4.6:1（听障友好），接近 App 主按钮色
+BLUE = (10, 108, 255, 255)      # #0A6CFF 气泡
+NAVY = (17, 24, 39, 255)        # v5 深黑蓝底，与 v1-v4 的蓝/白底完全不同
+YELLOW = (255, 214, 10, 255)    # v5 徽章黄
 WHITE = (255, 255, 255, 255)
 CLEAR = (0, 0, 0, 0)
 FONT = "/System/Library/Fonts/STHeiti Light.ttc"  # Mac 自带中易体，可渲染汉字
@@ -55,11 +57,11 @@ def draw_content(d, S, badge, mode):
     if badge:
         br = int(S * 0.14)
         cx, cy = int(S * 0.68), int(S * 0.66)  # 保持在自适应安全区(中央 66%)内
-        badge_fill = WHITE if mode == "mono" else BLUE
+        badge_fill = WHITE if mode == "mono" else YELLOW
         d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=badge_fill)
         bf = ImageFont.truetype(FONT, int(br * 1.25))
         bb = d.textbbox((0, 0), badge, font=bf)
-        char_fill = CLEAR if mode == "mono" else WHITE
+        char_fill = CLEAR if mode == "mono" else NAVY
         d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
                badge, font=bf, fill=char_fill)
 
@@ -70,7 +72,7 @@ def draw_logo(size, badge, mode):
     img = Image.new("RGBA", (S, S), CLEAR)
     d = ImageDraw.Draw(img)
     if mode == "legacy":
-        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=WHITE)  # v4 白底
+        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=NAVY)  # v5 深黑蓝底
     draw_content(d, S, badge, mode)
     return img
 
