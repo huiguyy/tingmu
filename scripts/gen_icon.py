@@ -32,20 +32,22 @@ def fit_font(draw, text, max_w, start_size):
 
 
 def draw_content(d, S, badge, mode):
-    """v3 纯几何：白色字幕框（圆角矩形+小尾巴）+ 框内两条粗蓝杠 + 右下徽章。
-    不用文字——小尺寸下汉字渲染必糊；粗几何块在 48px 也分明。mode: fg=彩色徽章, mono=白色剪影"""
-    # 字幕框（白色）
-    bx, by = int(S * 0.18), int(S * 0.26)
-    bw, bh = int(S * 0.64), int(S * 0.42)
-    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(S * 0.07), fill=WHITE)
+    """v4 反色设计（与 v1/v3 蓝底白标完全不同，一眼能认出是新 logo)：
+    蓝色字幕气泡（圆角矩形+尾巴）+ 泡内两条粗白杠 + 右下徽章圆圈（快/双）。
+    mode: fg=彩色(蓝泡白杠蓝徽章白字); mono=白色剪影; legacy 下由调用方先铺白底"""
+    bubble_fill = WHITE if mode == "mono" else BLUE
+    bar_fill = CLEAR if mode == "mono" else WHITE
+    # 蓝色气泡
+    bx, by = int(S * 0.20), int(S * 0.24)
+    bw, bh = int(S * 0.60), int(S * 0.40)
+    d.rounded_rectangle([bx, by, bx + bw, by + bh], radius=int(S * 0.07), fill=bubble_fill)
     tail = int(S * 0.045)
     d.polygon([(bx + int(S * 0.12), by + bh - 2),
                (bx + int(S * 0.12) + tail * 2, by + bh - 2),
-               (bx + int(S * 0.12) + tail, by + bh + int(S * 0.10))], fill=WHITE)
-    # 框内两条粗字幕杠（蓝；mono 时为透明孔）
-    bar_fill = CLEAR if mode == "mono" else BLUE
+               (bx + int(S * 0.12) + tail, by + bh + int(S * 0.10))], fill=bubble_fill)
+    # 泡内两条粗白杠
     for i, wfrac in enumerate((0.68, 0.44)):
-        lh = int(S * 0.10)  # 杠高 10%——48px 下约 5px，依然清晰
+        lh = int(S * 0.10)
         ly = by + int(bh * (0.24 + i * 0.40))
         lx = bx + int(S * 0.08)
         lw = int((bw - 2 * int(S * 0.08)) * wfrac)
@@ -53,10 +55,11 @@ def draw_content(d, S, badge, mode):
     if badge:
         br = int(S * 0.14)
         cx, cy = int(S * 0.68), int(S * 0.66)  # 保持在自适应安全区(中央 66%)内
-        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=WHITE)
+        badge_fill = WHITE if mode == "mono" else BLUE
+        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=badge_fill)
         bf = ImageFont.truetype(FONT, int(br * 1.25))
         bb = d.textbbox((0, 0), badge, font=bf)
-        char_fill = CLEAR if mode == "mono" else BLUE
+        char_fill = CLEAR if mode == "mono" else WHITE
         d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
                badge, font=bf, fill=char_fill)
 
@@ -67,7 +70,7 @@ def draw_logo(size, badge, mode):
     img = Image.new("RGBA", (S, S), CLEAR)
     d = ImageDraw.Draw(img)
     if mode == "legacy":
-        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=BLUE)
+        d.rounded_rectangle([0, 0, S - 1, S - 1], radius=int(S * 0.18), fill=WHITE)  # v4 白底
     draw_content(d, S, badge, mode)
     return img
 
@@ -99,7 +102,7 @@ def main():
     with open(os.path.join(dd, "ic_launcher_background.xml"), "w") as f:
         f.write('<?xml version="1.0" encoding="utf-8"?>\n'
                 '<shape xmlns:android="http://schemas.android.com/apk/res/android">'
-                '<solid android:color="#0A6CFF"/></shape>\n')
+                '<solid android:color="#FFFFFF"/></shape>\n')  # v4 白底
     print(f"icons v2 generated: variant={variant} badge={badge} -> {res}")
 
 
