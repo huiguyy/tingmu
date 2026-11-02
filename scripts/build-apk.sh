@@ -25,6 +25,10 @@ mkdir -p "$ASSETS"
   || bash "$ROOT/scripts/fetch-models.sh"
 for d in "$ASSETS"/*/; do [ -d "$d" ] && mv "$d" "$STAGE/"; done
 
+# 输出文件名带版本号（从 build.gradle.kts 读 versionName)，避免来回覆盖分不清
+VER=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts | head -1 | sed 's/.*"\(.*\)"/\1/')
+echo "versionName=$VER"
+
 case "${1:-}" in
   bilingual|fast)
     # 每个版本生成自己的 launcher 图标（徽章字 快/双）
@@ -40,14 +44,14 @@ case "${1:-}" in
       cp "$ROOT/models/x-asr-480ms-zh-en-punct-int8/$f" "$ASSETS/x-asr-480ms-zh-en-punct-int8/"
     done
     ./gradlew :app:assembleDebug -Plite=true -Pvariant=bilingual ${EXTRA_ABIS:-} --no-daemon -q
-    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-双语版.apk}"
-    echo "== 双语版已出: ${OUT:-$ROOT/听幕-双语版.apk}"
+    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-双语版-v${VER}.apk}"
+    echo "== 双语版已出: ${OUT:-$ROOT/听幕-双语版-v${VER}.apk}"
     ;;
   fast)
     cp -r "$ROOT/models/small-ctc-zh-2025" "$ASSETS/"
     ./gradlew :app:assembleDebug -Pvariant=fast ${EXTRA_ABIS:-} --no-daemon -q
-    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-快速版.apk}"
-    echo "== 快速版已出: ${OUT:-$ROOT/听幕-快速版.apk}"
+    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-快速版-v${VER}.apk}"
+    echo "== 快速版已出: ${OUT:-$ROOT/听幕-快速版-v${VER}.apk}"
     ;;
   *) echo "用法: $0 bilingual|fast" >&2; exit 1 ;;
 esac
