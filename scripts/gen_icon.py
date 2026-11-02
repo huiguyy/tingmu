@@ -85,25 +85,9 @@ def main():
         logo = draw_logo(px * 4, badge, "legacy").resize((px, px), Image.LANCZOS)
         logo.save(os.path.join(d, "ic_launcher.png"))
         logo.save(os.path.join(d, "ic_launcher_round.png"))
-    ad = os.path.join(res, "mipmap-anydpi-v26")
-    os.makedirs(ad, exist_ok=True)
-    draw_logo(432, badge, "fg").save(os.path.join(ad, "ic_launcher_foreground.png"))
-    draw_logo(432, badge, "mono").save(os.path.join(ad, "ic_launcher_monochrome.png"))
-    for n in ("ic_launcher", "ic_launcher_round"):
-        with open(os.path.join(ad, f"{n}.xml"), "w") as f:
-            f.write('<?xml version="1.0" encoding="utf-8"?>\n'
-                    '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
-                    '    <background android:drawable="@drawable/ic_launcher_background"/>\n'
-                    '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
-                    '    <monochrome android:drawable="@mipmap/ic_launcher_monochrome"/>\n'
-                    '</adaptive-icon>\n')
-    dd = os.path.join(res, "drawable")
-    os.makedirs(dd, exist_ok=True)
-    with open(os.path.join(dd, "ic_launcher_background.xml"), "w") as f:
-        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
-                '<shape xmlns:android="http://schemas.android.com/apk/res/android">'
-                '<solid android:color="#FFFFFF"/></shape>\n')  # v4 白底
-    print(f"icons v2 generated: variant={variant} badge={badge} -> {res}")
+    # 不用自适应图标：手机启动器会把自适应 icon 裁成圆形/缩小，和预览图不一致。
+    # 只用整块 PNG，预览看到的就是手机上显示的。
+    print(f"icons v4 generated (plain PNG, no adaptive): variant={variant} badge={badge} -> {res}")
 
 
 if __name__ == "__main__":
