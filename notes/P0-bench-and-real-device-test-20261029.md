@@ -398,3 +398,34 @@ SELFTEST_DONE rtf=0.2356 text=...（同上，含"听目/厅长"两处错字，�
 - **成品：197,785,969 字节（189MB），sha256 前缀 `2b74a39af25d5431`**；aapt2 校验 package/versionCode=15/versionName=1.5/label=听幕方言版/native-code=arm64-v8a
 - APK 内 icon 无 anydpi 条目（纯 PNG，8864B/xxxhdpi），徽章「方」像素与 v9 设计一致
 - 分发：`~/Downloads/听幕-方言版-v1.5.apk` + GitHub Release v1.5 第三资产 `tingmu-dialect-v1.5.apk`
+
+---
+
+## 二十、v1.6 方言版双通道 + 标点（2026-11-03）
+
+用户真机反馈"方言版没有标点符号"，并要求按双 pass 方案改造（"没有流式的那种感受好，准确度比前两个强太多了"）。
+
+**双通道实现（MainActivity.runOfflineEngine）**：
+- 方言包同时内置 `small-ctc`（25MB 流式）与 `SenseVoice`（237MB 离线）+ VAD + 标点模型
+- 每个音频块同时喂 VAD（切句）与流式识别器（实时出字，`partial` 半透明显示）
+- 静音 ≥600ms / 单句 >12s 判句结束：立刻把第一遍流式文本 `commitSegment` 上屏（段 id 记录），同时把该段音频丢给单线程 executor 跑 SenseVoice 整句解码
+- 第二遍结果回来后 `replaceSegment(id, text)` **就地替换同一段**（字幕"跳一下"变准），不新增行
+- 字幕存储从 `StringBuilder` 改为 `ArrayList<Seg(id, text, sep)>`：支持按 id 回填、按段丢弃老内容（>4000 字）、长停顿把末段分隔符升级为换行
+
+**标点**：SenseVoice 实测**不出标点**（use_itn True/False、language zh/auto 四种组合都没有），这是模型特性（FunASR 侧标点本来就是外挂模型）。因此方言版内置 `sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8`（75MB），第二遍识别完 `OfflinePunctuation.addPunctuation(text)` 补 "，。"。实测每句 12~340ms（首句含预热），中英混排会插中文标点（方言场景以中文为主，可接受）。
+
+**模拟器端到端自测（x86_64 包）**：
+```
+MODEL_LOADED sense-voice-int8-off vad=true dual=true punct=true
+SEG_COMMIT text=各位好我们今天来测试一下听目的实十字幕功能把语音变成大字显示在屏幕上...   ← 第一遍流式（实时）
+SEG_CORRECT text=好，我们今天来测试一下听目的实时字幕功能，把语音变成大字，显示在屏幕上。...  ← 第二遍 SenseVoice+标点
+SEG_COMMIT text=窗口对厅朋友来说都是难关希望这个工具能帮上
+SEG_CORRECT text=窗口对厅长朋友来说都是难关，希望这个工具能帮上忙。
+SELFTEST_DONE rtf=0.2287
+```
+- 抓屏确认：第一遍文本先显示，约 1 秒后被带标点版本替换（同一行）
+- 快速版回归（流式路径共用新的 segs 渲染）：`SELFTEST_DONE rtf=0.1107` 正常
+- 已知：第一遍小模型会丢字/错字（"实十""厅朋友"），第二遍修正；句首"各位"在第二遍被 VAD 起点切掉（与单通道同现象）
+
+**体积**：方言版 280,492,283B（267MB，三模型：SenseVoice 237MB + 标点 75MB + 流式 26MB）；快速版 76,327,464B；双语版 165,324,427B。三包均 vc16/v1.6、纯 PNG 图标、无 anydpi。
+**分发**：~/Downloads 三件 v1.6（v1.5 已删）；GitHub Release v1.6 三资产（ASCII 名）。源码待推。

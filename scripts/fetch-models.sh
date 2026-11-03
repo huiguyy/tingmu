@@ -39,5 +39,13 @@ if [ ! -f "$M/sense-voice-int8/tokens.txt" ]; then
   mv "$TMP/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09" "$M/sense-voice-int8"
 fi
 
+# 方言版标点模型：CT-Transformer zh-en int8（75MB，SenseVoice 本身不输出标点，第二遍后处理补标点）
+if [ ! -f "$M/punct-ct-transformer-zh-en/model.int8.onnx" ]; then
+  dl "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8.tar.bz2" "$TMP/punct.tar.bz2"
+  tar -xf "$TMP/punct.tar.bz2" -C "$TMP"
+  rm -rf "$M/punct-ct-transformer-zh-en"
+  mv "$TMP/sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12-int8" "$M/punct-ct-transformer-zh-en"
+fi
+
 echo "models ready under $M:"
 ls "$M"

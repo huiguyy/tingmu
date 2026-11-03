@@ -1,10 +1,12 @@
 #!/bin/bash
-# 打包听幕两个发行版——每个版本只内置一个模型，职责单一：
+# 打包听幕三个发行版——每个版本一个 applicationId，可同机共存：
 #   bilingual → 听幕-双语版.apk：arm64 专属（-Plite=true）+ x-asr 中英双语模型，约 170MB
 #               可识别英文(ABC/PDF)与标点；速度慢约 2.5-3 倍，适合 64 位大内存手机
 #   fast      → 听幕-快速版.apk：双架构（arm64+v7a，32 位老机可用）+ small-ctc 25MB，约 72MB
 #               快/省电/发热低；不支持英文，v0.9 起 <unk> 不再显示
-# 用法: scripts/build-apk.sh bilingual|fast
+#   dialect   → 听幕-方言版.apk：arm64 + small-ctc 25MB（第一遍流式出字）
+#               + SenseVoice 离线方言模型 233MB（第二遍整句纠错），约 215MB
+# 用法: scripts/build-apk.sh bilingual|fast|dialect
 # 环境变量: OUT=<输出apk路径> EXTRA_ABIS="-PextraAbis=x86_64"（模拟器验证用）
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,7 +23,7 @@ restore() {
 trap restore EXIT
 mkdir -p "$ASSETS"
 # 模型统一从仓库根 models/ 来（首次构建自动下载）
-[ -f "$ROOT/models/small-ctc-zh-2025/tokens.txt" ] && [ -f "$ROOT/models/x-asr-480ms-zh-en-punct-int8/tokens.txt" ] && [ -f "$ROOT/models/sense-voice-int8/tokens.txt" ] \
+[ -f "$ROOT/models/small-ctc-zh-2025/tokens.txt" ] && [ -f "$ROOT/models/x-asr-480ms-zh-en-punct-int8/tokens.txt" ] && [ -f "$ROOT/models/sense-voice-int8/tokens.txt" ] && [ -f "$ROOT/models/punct-ct-transformer-zh-en/model.int8.onnx" ] \
   || bash "$ROOT/scripts/fetch-models.sh"
 for d in "$ASSETS"/*/; do [ -d "$d" ] && mv "$d" "$STAGE/"; done
 
@@ -31,7 +33,7 @@ echo "versionName=$VER"
 
 case "${1:-}" in
   bilingual|fast|dialect)
-    # 每个版本生成自己的 launcher 图标（徽章字 快/双）
+    # 每个版本生成自己的 launcher 图标（徽章字 快/双/方）
     python3 "$ROOT/scripts/gen_icon.py" "$1" app/src/main/res
     ;;
 esac
@@ -48,10 +50,14 @@ case "${1:-}" in
     echo "== 双语版已出: ${OUT:-$ROOT/听幕-双语版-v${VER}.apk}"
     ;;
   dialect)
-    # 离线方言模型（SenseVoice）：只拷模型本体
+    # 双通道：流式小模型（第一遍实时出字）+ SenseVoice 离线方言模型（第二遍整句纠错）
+    # + CT-Transformer 标点模型（SenseVoice 不输出标点，第二遍结果补 "，。"）
     mkdir -p "$ASSETS/sense-voice-int8"
     cp "$ROOT/models/sense-voice-int8/model.int8.onnx" "$ASSETS/sense-voice-int8/"
     cp "$ROOT/models/sense-voice-int8/tokens.txt" "$ASSETS/sense-voice-int8/"
+    cp -r "$ROOT/models/small-ctc-zh-2025" "$ASSETS/"
+    mkdir -p "$ASSETS/punct-ct-transformer-zh-en"
+    cp "$ROOT/models/punct-ct-transformer-zh-en/model.int8.onnx" "$ASSETS/punct-ct-transformer-zh-en/"
     ./gradlew :app:assembleDebug -Plite=true -Pvariant=dialect ${EXTRA_ABIS:-} --no-daemon -q
     cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-方言版-v${VER}.apk}"
     echo "== 方言版已出: ${OUT:-$ROOT/听幕-方言版-v${VER}.apk}"
@@ -62,5 +68,5 @@ case "${1:-}" in
     cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-快速版-v${VER}.apk}"
     echo "== 快速版已出: ${OUT:-$ROOT/听幕-快速版-v${VER}.apk}"
     ;;
-  *) echo "用法: $0 bilingual|fast" >&2; exit 1 ;;
+  *) echo "用法: $0 bilingual|fast|dialect" >&2; exit 1 ;;
 esac

@@ -23,6 +23,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.k2fsa.sherpa.onnx.OfflinePunctuation
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
@@ -59,7 +60,10 @@ class MainActivity : Activity() {
     private val cancelFlag = AtomicBoolean(false)
     private var engineThread: Thread? = null
     private val ui = Handler(Looper.getMainLooper())
-    private val finalized = StringBuilder()
+    /** 已定格的段落：双通道下方言模型回填时要就地替换，所以按段存而不是拼成一个大串 */
+    private class Seg(val id: Long, var text: String, var sep: Char)
+    private val segs = ArrayList<Seg>()
+    private var nextSegId = 0L
     private var lastVoiceMs = 0L
     private var softPaused = false
     private var decodeMsSum = 0.0
@@ -300,7 +304,7 @@ class MainActivity : Activity() {
                 startBtn.text = Strings.start
             }
         }
-        synchronized(finalized) { finalized.setLength(0) }
+        synchronized(segs) { segs.clear(); nextSegId = 0L }
         captionText.text = ""
         dotLevel = 0f
         liveDot.alpha = 0.15f
@@ -350,7 +354,11 @@ class MainActivity : Activity() {
 
     private fun defaultModel(): ModelEntry? {
         val models = AsrEngine.discover(this)
-        return models.firstOrNull { it.isCtc && it.id.startsWith("small") }
+        // 每个变体首选的模型前缀：方言版=sense（离线方言），双语版=x-asr，快速版=small
+        val pref = getString(R.string.model_pref)
+        val hit = models.filter { it.id.startsWith(pref) }
+        return hit.firstOrNull { pref != "sense" || it.isOffline }
+            ?: hit.firstOrNull()
             ?: models.firstOrNull()
     }
 
@@ -375,21 +383,33 @@ class MainActivity : Activity() {
         startEngine(pick, source)
     }
 
-    /** 离线模型（SenseVoice）的识别管线：VAD 切短段 → 整句识别 → 出字。
-     *  离线模型没有流式接口，所以字幕是"一段说完才出"；VAD 按 0.6s 停顿切短语以压低延迟。 */
+    /** 方言版双通道：流式小模型先实时出字（第一遍），VAD 判一句说完后
+     *  方言离线模型把这句重新解码、就地替换成更准的字幕（第二遍）。
+     *  没有可用流式模型时退回"整句出字"单通道。 */
     private fun runOfflineEngine(model: ModelEntry, source: String) {
         var rec: OfflineRecognizer? = null
+        var srec: OnlineRecognizer? = null
+        var sst: OnlineStream? = null
+        var punct: OfflinePunctuation? = null
         var vad: Vad? = null
         val decExec = java.util.concurrent.Executors.newSingleThreadExecutor()
         try {
             Log.i(TAG, "MODEL_LOADING " + model.id + " src=" + source + " offline=true")
             rec = AsrEngine.buildOfflineRecognizer(model)
+            // 第一遍的流式模型：随包内置的 small-ctc（25MB），方言包里有就直接用
+            val streamEntry = AsrEngine.discover(this).firstOrNull { it.isCtc && !it.isOffline }
+            if (streamEntry != null) {
+                srec = AsrEngine.buildRecognizer(streamEntry)
+                sst = srec.createStream()
+            }
             vad = AsrEngine.buildVad(this@MainActivity)
+            // SenseVoice 不输出标点：第二遍识别完再走一遍标点模型（CT-Transformer）
+            punct = AsrEngine.buildPunctuation(this@MainActivity)
             if (cancelFlag.get()) return
             currentModelId = model.id
             running.set(true)
             starting.set(false)
-            Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null))
+            Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null) + " dual=" + (srec != null) + " punct=" + (punct != null))
             ui.post { setPhase("running") }
             val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
             if (src == null) {
@@ -398,35 +418,92 @@ class MainActivity : Activity() {
             }
             src.open()
             val segRec = rec!!
+            val streamRec = srec
+            val dual = streamRec != null && sst != null
             val sbuf = ArrayList<Float>(16000 * 12)
             var inSpeech = false
             var silenceMs = 0
+            var partial = ""
             var lastEndMs = SystemClock.elapsedRealtime()
+
+            // SenseVoice 本身不发标点，第二遍结果交给标点模型补 "，。"；标点模型缺失时原样返回
+            val addPunct = fun(t: String): String {
+                if (t.isBlank()) return t
+                val p = punct ?: return t
+                return try {
+                    p.addPunctuation(t).trim()
+                } catch (e: Exception) {
+                    Log.w(TAG, "punctuate failed", e)
+                    t
+                }
+            }
+
+            // 一句结束：定格第一遍字幕（马上上屏）→ 提交方言模型重解码 → 回来后替换该段
             val flush = fun() {
                 if (sbuf.size < 16000 / 4) { // <0.25s 忽略
                     sbuf.clear()
+                    partial = ""
                     return
                 }
                 val samples = FloatArray(sbuf.size) { sbuf[it] }
                 sbuf.clear()
                 val gap = SystemClock.elapsedRealtime() - lastEndMs
                 lastEndMs = SystemClock.elapsedRealtime()
-                decExec.execute {
+                val sep = sepFor(gap)
+                if (dual) {
+                    var first = ""
                     try {
-                        val t0 = System.nanoTime()
-                        val ost = segRec.createStream()
-                        ost.acceptWaveform(samples, 16000)
-                        segRec.decode(ost)
-                        val text = cleanAsrText(segRec.getResult(ost).text)
-                        val ms = (System.nanoTime() - t0) / 1e6
-                        decodeMsSum += ms
-                        decodeCalls++
-                        if (text.isNotBlank()) {
-                            commitSegment(text, sepFor(gap))
-                            ui.post { render("", dotLevel) }
+                        val st = sst
+                        if (st != null) {
+                            st.inputFinished()
+                            while (streamRec!!.isReady(st)) streamRec.decode(st)
+                            first = cleanAsrText(streamRec.getResult(st).text)
                         }
                     } catch (e: Exception) {
-                        Log.e(TAG, "offline decode error", e)
+                        Log.w(TAG, "stream finalize failed", e)
+                    }
+                    val id = commitSegment(first, sep)
+                    partial = ""
+                    decExec.execute {
+                        try {
+                            val t0 = System.nanoTime()
+                            val ost = segRec.createStream()
+                            ost.acceptWaveform(samples, 16000)
+                            segRec.decode(ost)
+                            val text = addPunct(cleanAsrText(segRec.getResult(ost).text))
+                            val ms = (System.nanoTime() - t0) / 1e6
+                            decodeMsSum += ms
+                            decodeCalls++
+                            if (text.isNotBlank()) {
+                                replaceSegment(id, text)
+                                Log.i(TAG, "SEG_CORRECT text=" + text)
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "offline decode error", e)
+                        }
+                        ui.post { render("", dotLevel) }
+                    }
+                    // inputFinished 之后旧流不能复用
+                    try { sst?.release() } catch (_: Exception) {}
+                    sst = streamRec!!.createStream()
+                } else {
+                    decExec.execute {
+                        try {
+                            val t0 = System.nanoTime()
+                            val ost = segRec.createStream()
+                            ost.acceptWaveform(samples, 16000)
+                            segRec.decode(ost)
+                            val text = addPunct(cleanAsrText(segRec.getResult(ost).text))
+                            val ms = (System.nanoTime() - t0) / 1e6
+                            decodeMsSum += ms
+                            decodeCalls++
+                            if (text.isNotBlank()) {
+                                commitSegment(text, sep)
+                                ui.post { render("", dotLevel) }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "offline decode error", e)
+                        }
                     }
                 }
             }
@@ -456,6 +533,19 @@ class MainActivity : Activity() {
                     silenceMs += 100
                 }
                 if (inSpeech) for (v in chunk) sbuf.add(v)
+                // 第一遍流式识别：实时出字
+                if (dual) {
+                    try {
+                        val st = sst
+                        if (st != null) {
+                            st.acceptWaveform(chunk, 16000)
+                            while (streamRec!!.isReady(st)) streamRec.decode(st)
+                            partial = cleanAsrText(streamRec.getResult(st).text)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "stream decode failed", e)
+                    }
+                }
                 if (inSpeech && silenceMs >= 600) {
                     flush()
                     inSpeech = false
@@ -463,7 +553,7 @@ class MainActivity : Activity() {
                 } else if (sbuf.size > 16000 * 12) {
                     flush() // 长句强制切段，避免无限积压
                 }
-                ui.post { render("", lvl) }
+                ui.post { render(partial, lvl) }
             }
             flush()
             decExec.shutdown()
@@ -471,13 +561,16 @@ class MainActivity : Activity() {
             if (source == "wav" && running.get()) {
                 val dur = selftestDurSec()
                 val rtf = decodeMsSum / 1000.0 / dur
-                val fin = synchronized(finalized) { finalized.toString().trim() }
+                val fin = displayText().trim()
                 Log.i(TAG, "SELFTEST_DONE rtf=" + String.format("%.4f", rtf) + " text=" + fin)
             }
         } catch (e: Exception) {
             Log.e(TAG, "engine error", e)
             ui.post { Toast.makeText(this, e.message ?: Strings.loadFail, Toast.LENGTH_SHORT).show() }
         } finally {
+            try { sst?.release() } catch (_: Exception) {}
+            try { srec?.release() } catch (_: Exception) {}
+            try { punct?.release() } catch (_: Exception) {}
             try { vad?.release() } catch (_: Exception) {}
             try { rec?.release() } catch (_: Exception) {}
             running.set(false)
@@ -498,7 +591,7 @@ class MainActivity : Activity() {
         startBtn.text = busyLabel
         startBtn.isEnabled = false
         selftestBtn.isEnabled = false
-        finalized.setLength(0)
+        synchronized(segs) { segs.clear(); nextSegId = 0L }
         decodeMsSum = 0.0
         decodeCalls = 0
         maxDecodeMs = 0.0
@@ -633,22 +726,53 @@ class MainActivity : Activity() {
             partial = ""
         } else if (softPaused && gapMs > 2500) {
             // 长停顿：末尾空格升级为换行（只升级一次）
-            synchronized(finalized) {
-                if (finalized.isNotEmpty() && finalized.last() == ' ') {
-                    finalized.setCharAt(finalized.length - 1, '\n')
-                }
-            }
+            upgradeLastSep()
         }
         ui.post { render(partial, lvl) }
     }
 
-    /** 定格一段已识别文字，末尾留分隔符（短停顿空格 / 长停顿换行，不加标点） */
-    private fun commitSegment(text: String, sep: Char) {
-        synchronized(finalized) {
-            finalized.append(text).append(sep)
-            if (finalized.length > 4000) finalized.delete(0, finalized.length - 3000)
+    /** 定格一段已识别文字，末尾留分隔符（短停顿空格 / 长停顿换行，不加标点）。
+     *  返回段 id：双通道下第二遍离线结果回来后按 id 就地替换。 */
+    private fun commitSegment(text: String, sep: Char): Long {
+        val id = synchronized(segs) {
+            val id = nextSegId++
+            segs.add(Seg(id, text, sep))
+            // 超长时丢最老的段，防止字幕无限占用内存
+            var total = segs.sumOf { it.text.length }
+            while (segs.size > 1 && total > 4000) {
+                total -= segs[0].text.length
+                segs.removeAt(0)
+            }
+            id
         }
         Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == '\n') "\\n" else "space") + " text=" + text)
+        return id
+    }
+
+    /** 第二遍（方言模型）结果回填：只替换指定段，用户看到的还是同一行字幕 */
+    private fun replaceSegment(id: Long, text: String) {
+        synchronized(segs) {
+            val s = segs.firstOrNull { it.id == id } ?: return
+            s.text = text
+        }
+    }
+
+    /** 长停顿：把最后一段的分隔符从空格升级为换行 */
+    private fun upgradeLastSep() {
+        synchronized(segs) {
+            val last = segs.lastOrNull() ?: return
+            if (last.sep == ' ') last.sep = '\n'
+        }
+    }
+
+    /** 当前全部字幕（已定格段 + 间分隔符），供渲染与自测日志用 */
+    private fun displayText(): String = synchronized(segs) {
+        buildString {
+            for (s in segs) {
+                append(s.text)
+                append(s.sep)
+            }
+        }
     }
 
     private fun sepFor(gapMs: Long) = if (gapMs > 2500) '\n' else ' '
@@ -668,7 +792,7 @@ class MainActivity : Activity() {
     private fun render(partial: String, level: Float) {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
-        val shown = synchronized(finalized) { finalized.toString() } + partial
+        val shown = displayText() + partial
         captionText.text = shown
         captionScroll.post { captionScroll.fullScroll(View.FOCUS_DOWN) }
         val avgMs = if (decodeCalls > 0) decodeMsSum / decodeCalls else 0.0

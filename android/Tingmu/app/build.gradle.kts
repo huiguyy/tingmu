@@ -20,10 +20,16 @@ android {
             "dialect" -> "听幕方言版"
             else -> "听幕快速版"
         })
+        // 各变体首选的模型（defaultModel 读取）：方言版默认离线方言模型，内置的流式小模型只做第一遍
+        resValue("string", "model_pref", when (variant) {
+            "bilingual" -> "x-asr"
+            "dialect" -> "sense"
+            else -> "small"
+        })
         minSdk = 24
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.5"
+        versionCode = 16
+        versionName = "1.6"
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加
             val lite = (project.findProperty("lite") as? String) == "true"
