@@ -14,8 +14,8 @@ android {
         resValue("string", "app_name", if (variant == "bilingual") "听幕双语版" else "听幕快速版")
         minSdk = 24
         targetSdk = 35
-        versionCode = 14
-        versionName = "1.4"
+        versionCode = 15
+        versionName = "1.5"
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加
             val lite = (project.findProperty("lite") as? String) == "true"

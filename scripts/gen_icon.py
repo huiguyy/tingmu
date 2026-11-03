@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""生成听幕 launcher 图标 v8（PIL 程序化绘制，无外部素材）。
+"""生成听幕 launcher 图标 v9（PIL 程序化绘制，无外部素材）。
 
-v8 = 用户认可 v1.2 的"悬浮泡"外观 + 自适应机制（系统合成，只裁切永不拉伸）：
-  - adaptive 背景层 = 全透明（泡外无任何底色）
-  - adaptive 前景层 = 完整气泡造型（蓝泡+尾巴+白杠+黄徽章）全部画在中央安全区(66%)内
-  - legacy PNG（API<26 / 安装界面）= 同款造型，泡稍大铺满画布
-  - 预览 = 圆形裁切模拟启动器渲染
+v9 = 回到用户认可的 v1.2 纯 PNG 方案（无自适应 icon，避免"光圈/蓝方块"等图层渲染差异）：
+  - 单一 PNG 图标：透明底，蓝泡几乎铺满画布（左右 3%~97%、上下 8%~84% + 尾巴），
+    白杠加粗，右下黄徽章（快/双）——启动器无论缩放/裁切，看到的都是这个泡。
+  - 不生成 mipmap-anydpi-v26 / drawable 背景层；manifest 引用 @mipmap/ic_launcher 走 PNG。
 
 用法: python3 gen_icon.py <fast|bilingual|base> <app/src/main/res>
 """
@@ -23,40 +22,34 @@ FONT = "/System/Library/Fonts/STHeiti Light.ttc"
 BADGE = {"fast": "快", "bilingual": "双", "base": None}
 
 
-def draw_bubble(d, S, badge, x0, y0, x1, y1):
-    """在给定矩形里画完整气泡造型：蓝泡+尾巴+白杠+黄徽章"""
-    d.rounded_rectangle([x0, y0, x1, y1], radius=int((x1 - x0) * 0.16), fill=BLUE)
-    tail = int((x1 - x0) * 0.10)
-    ty = y1 - 2
-    d.polygon([(x0 + int((x1 - x0) * 0.16), ty), (x0 + int((x1 - x0) * 0.16) + tail * 2, ty),
-               (x0 + int((x1 - x0) * 0.16) + tail, ty + int((y1 - y0) * 0.30))], fill=BLUE)
-    bw, bh = x1 - x0, y1 - y0
-    for i, wfrac in enumerate((0.70, 0.46)):
-        lh = max(3, int(bh * 0.17))
-        ly = y0 + int(bh * (0.24 + i * 0.38))
-        lx = x0 + int(bw * 0.12)
-        lw = int((bw - 2 * int(bw * 0.12)) * wfrac)
-        d.rounded_rectangle([lx, ly, lx + lw, ly + lh], radius=lh // 2, fill=WHITE)
-    if badge:
-        br = int(bh * 0.34)
-        cx, cy = x1 - int(bw * 0.10), y1 - int(bh * 0.02)
-        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=YELLOW)
-        bf = ImageFont.truetype(FONT, int(br * 1.25))
-        bb = d.textbbox((0, 0), badge, font=bf)
-        d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
-               badge, font=bf, fill=NAVY)
-
-
-def draw_logo(size, badge, mode):
-    """mode: fg=自适应前景（整个造型收在中央 66% 安全区）; legacy=安装界面/老系统（泡铺 80% 画布）"""
+def draw_icon(size, badge):
     S = size
     img = Image.new("RGBA", (S, S), CLEAR)
     d = ImageDraw.Draw(img)
-    if mode == "fg":
-        # 安全区: 中央 66% → x/y 从 0.17S 到 0.83S
-        draw_bubble(d, S, badge, int(S * 0.17), int(S * 0.22), int(S * 0.83), int(S * 0.72))
-    else:
-        draw_bubble(d, S, badge, int(S * 0.08), int(S * 0.12), int(S * 0.92), int(S * 0.78))
+    # 气泡几乎铺满画布，减少任何缩放带来的视觉变形
+    x0, y0, x1, y1 = int(S * 0.03), int(S * 0.08), int(S * 0.97), int(S * 0.84)
+    d.rounded_rectangle([x0, y0, x1, y1], radius=int(S * 0.14), fill=BLUE)
+    tail = int(S * 0.10)
+    ty = y1 - 2
+    d.polygon([(x0 + int(S * 0.12), ty), (x0 + int(S * 0.12) + tail * 2, ty),
+               (x0 + int(S * 0.12) + tail, ty + int(S * 0.13))], fill=BLUE)
+    # 两条粗白杠
+    bw, bh = x1 - x0, y1 - y0
+    for i, wfrac in enumerate((0.72, 0.48)):
+        lh = max(4, int(S * 0.10))
+        ly = y0 + int(bh * (0.26 + i * 0.34))
+        lx = x0 + int(bw * 0.09)
+        lw = int((bw - 2 * int(bw * 0.09)) * wfrac)
+        d.rounded_rectangle([lx, ly, lx + lw, ly + lh], radius=lh // 2, fill=WHITE)
+    # 右下黄徽章
+    if badge:
+        br = int(S * 0.15)
+        cx, cy = int(S * 0.80), int(S * 0.80)
+        d.ellipse([cx - br, cy - br, cx + br, cy + br], fill=YELLOW)
+        bf = ImageFont.truetype(FONT, int(br * 1.3))
+        bb = d.textbbox((0, 0), badge, font=bf)
+        d.text((cx - (bb[2] - bb[0]) / 2 - bb[0], cy - (bb[3] - bb[1]) / 2 - bb[1]),
+               badge, font=bf, fill=NAVY)
     return img
 
 
@@ -64,27 +57,23 @@ def main():
     variant, res = sys.argv[1], sys.argv[2]
     badge = BADGE.get(variant)
     os.makedirs(res, exist_ok=True)
+    # 清掉可能残留的自适应资源，确保只走 PNG
+    for stale in ("mipmap-anydpi-v26",):
+        p = os.path.join(res, stale)
+        if os.path.isdir(p):
+            for f in os.listdir(p):
+                os.remove(os.path.join(p, f))
+            os.rmdir(p)
+    bg = os.path.join(res, "drawable", "ic_launcher_background.xml")
+    if os.path.exists(bg):
+        os.remove(bg)
     for name, px in [("mdpi", 48), ("hdpi", 72), ("xhdpi", 96), ("xxhdpi", 144), ("xxxhdpi", 192)]:
         d = os.path.join(res, f"mipmap-{name}")
         os.makedirs(d, exist_ok=True)
-        draw_logo(px * 4, badge, "legacy").resize((px, px), Image.LANCZOS).save(os.path.join(d, "ic_launcher.png"))
-    ad = os.path.join(res, "mipmap-anydpi-v26")
-    os.makedirs(ad, exist_ok=True)
-    draw_logo(432, badge, "fg").save(os.path.join(ad, "ic_launcher_foreground.png"))
-    with open(os.path.join(ad, "ic_launcher.xml"), "w") as f:
-        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
-                '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
-                '    <background android:drawable="@drawable/ic_launcher_background"/>\n'
-                '    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n'
-                '</adaptive-icon>\n')
-    dd = os.path.join(res, "drawable")
-    os.makedirs(dd, exist_ok=True)
-    # 背景层全透明 → 泡外无任何底色，启动器上呈悬浮泡
-    with open(os.path.join(dd, "ic_launcher_background.xml"), "w") as f:
-        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
-                '<shape xmlns:android="http://schemas.android.com/apk/res/android">'
-                '<solid android:color="#00000000"/></shape>\n')
-    print(f"icons v8 generated (transparent bg adaptive): variant={variant} badge={badge} -> {res}")
+        icon = draw_icon(px * 4, badge).resize((px, px), Image.LANCZOS)
+        icon.save(os.path.join(d, "ic_launcher.png"))
+        icon.save(os.path.join(d, "ic_launcher_round.png"))
+    print(f"icons v9 generated (plain PNG only): variant={variant} badge={badge} -> {res}")
 
 
 if __name__ == "__main__":
