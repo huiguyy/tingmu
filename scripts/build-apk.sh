@@ -21,7 +21,7 @@ restore() {
 trap restore EXIT
 mkdir -p "$ASSETS"
 # 模型统一从仓库根 models/ 来（首次构建自动下载）
-[ -f "$ROOT/models/small-ctc-zh-2025/tokens.txt" ] && [ -f "$ROOT/models/x-asr-480ms-zh-en-punct-int8/tokens.txt" ] \
+[ -f "$ROOT/models/small-ctc-zh-2025/tokens.txt" ] && [ -f "$ROOT/models/x-asr-480ms-zh-en-punct-int8/tokens.txt" ] && [ -f "$ROOT/models/sense-voice-int8/tokens.txt" ] \
   || bash "$ROOT/scripts/fetch-models.sh"
 for d in "$ASSETS"/*/; do [ -d "$d" ] && mv "$d" "$STAGE/"; done
 
@@ -30,7 +30,7 @@ VER=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts | head -1 | sed 's/.
 echo "versionName=$VER"
 
 case "${1:-}" in
-  bilingual|fast)
+  bilingual|fast|dialect)
     # 每个版本生成自己的 launcher 图标（徽章字 快/双）
     python3 "$ROOT/scripts/gen_icon.py" "$1" app/src/main/res
     ;;
@@ -46,6 +46,15 @@ case "${1:-}" in
     ./gradlew :app:assembleDebug -Plite=true -Pvariant=bilingual ${EXTRA_ABIS:-} --no-daemon -q
     cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-双语版-v${VER}.apk}"
     echo "== 双语版已出: ${OUT:-$ROOT/听幕-双语版-v${VER}.apk}"
+    ;;
+  dialect)
+    # 离线方言模型（SenseVoice）：只拷模型本体
+    mkdir -p "$ASSETS/sense-voice-int8"
+    cp "$ROOT/models/sense-voice-int8/model.int8.onnx" "$ASSETS/sense-voice-int8/"
+    cp "$ROOT/models/sense-voice-int8/tokens.txt" "$ASSETS/sense-voice-int8/"
+    ./gradlew :app:assembleDebug -Plite=true -Pvariant=dialect ${EXTRA_ABIS:-} --no-daemon -q
+    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕-方言版-v${VER}.apk}"
+    echo "== 方言版已出: ${OUT:-$ROOT/听幕-方言版-v${VER}.apk}"
     ;;
   fast)
     cp -r "$ROOT/models/small-ctc-zh-2025" "$ASSETS/"

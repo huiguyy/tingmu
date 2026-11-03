@@ -21,4 +21,6 @@ data class ModelEntry(
     val dir: File,
     val isCtc: Boolean,
     val label: String,
+    /** true = 离线整句模型（SenseVoice 等，无流式接口）：VAD 切段后整句识别 */
+    val isOffline: Boolean = false,
 )

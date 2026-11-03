@@ -6,6 +6,10 @@ import android.util.Log
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.FeatureConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
 import com.k2fsa.sherpa.onnx.OnlineModelConfig
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizerConfig
@@ -81,9 +85,34 @@ object AsrEngine {
         val entries = mutableListOf<ModelEntry>()
         val hasCtc = dir.resolve("model.int8.onnx").isFile || dir.resolve("model.onnx").isFile
         val hasTransducer = dir.listFiles()?.any { it.name.startsWith("encoder") } == true
-        if (hasCtc) entries += ModelEntry(dir.name, dir, true, "$labelPrefix${dir.name}")
+        // SenseVoice 等离线模型同样是 model.int8.onnx 布局，靠目录名（含 sense）区分：
+        // 离线模型没有流式接口，走 VAD 切段 + 整句识别
+        val isSense = dir.name.contains("sense", ignoreCase = true)
+        if (hasCtc && isSense) {
+            entries += ModelEntry(dir.name + "-off", dir, false, "$labelPrefix${dir.name}", isOffline = true)
+        } else if (hasCtc) {
+            entries += ModelEntry(dir.name, dir, true, "$labelPrefix${dir.name}")
+        }
         if (hasTransducer) entries += ModelEntry(dir.name + "-td", dir, false, "$labelPrefix${dir.name}")
         return entries
+    }
+
+    /** 加载离线整句模型（当前仅 SenseVoice）。耗时数秒，必须在工作线程调用。 */
+    fun buildOfflineRecognizer(m: ModelEntry): OfflineRecognizer {
+        val dir = m.dir
+        val model = (dir.resolve("model.int8.onnx").takeIf { it.isFile } ?: dir.resolve("model.onnx")).absolutePath
+        val config = OfflineRecognizerConfig(
+            modelConfig = OfflineModelConfig(
+                senseVoice = OfflineSenseVoiceModelConfig(
+                    model = model,
+                    language = "zh",
+                    useInverseTextNormalization = true,
+                ),
+                tokens = dir.resolve("tokens.txt").absolutePath,
+                numThreads = 2,
+            ),
+        )
+        return OfflineRecognizer(null, config)
     }
 
     /** 加载识别器；耗时数秒，必须在工作线程调用。 */

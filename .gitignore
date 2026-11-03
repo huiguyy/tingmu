@@ -28,3 +28,4 @@ bench/audio/mixed_zh_en.wav
 
 __pycache__/
 *.pyc
+android/libs/

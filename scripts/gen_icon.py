@@ -19,7 +19,7 @@ YELLOW = (255, 214, 10, 255)    # 徽章
 WHITE = (255, 255, 255, 255)
 CLEAR = (0, 0, 0, 0)
 FONT = "/System/Library/Fonts/STHeiti Light.ttc"
-BADGE = {"fast": "快", "bilingual": "双", "base": None}
+BADGE = {"fast": "快", "bilingual": "双", "dialect": "方", "base": None}
 
 
 def draw_icon(size, badge):

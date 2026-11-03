@@ -360,3 +360,41 @@ adb push /Users/yangyan/ZCodeProject/tingmu/models/ctc-zh-2025/tokens.txt       
 **icon v2 重设计（同一天，用户拍板"logo 不行重新设计"）**： v1 气泡细线小尺寸糊 → v2 改为 **蓝底(#0A6CFF) + 中央白色粗体「听幕」+ 右下角徽章圆圈(快/双）**。理由：粗字小尺寸辨识度高；白字对蓝底 WCAG 对比度 4.56:1（v1 的 #0A84FF 只有 3.6:1，听障友好性不够，故加深）。monochrome 剪影层保留（主题图标）。像素验证：legacy 77%蓝+19%白字，mono 20%白色剪影；模拟器抽屉实测新蓝块内白字像素 1000+/格。重建：双语 sha `76af4cad460cd612`(165327328B) / 快速 `3d537f779fe5bd60`(76329093B)，已 cp ~/Downloads/、push 源码(06d22d7)、release v1.0 附件已 clobber 更新。
 
 **icon 补丁（同一天，用户真机报"logo 是空白图片"）**： APK 内 icon 资源像素验证其实非空（前景 432px 100% 不透明、78% 蓝），模拟器抽屉渲染也有蓝+白气泡； 真机空白最可能原因 = Android 13+ 主题图标（themed icons) 下 adaptive icon 缺 `<monochrome>` 层，前景整片不透明被压成纯色块，气泡看不见。修复： gen_icon.py 新增 monochrome 白色剪影层（气泡+徽章， 25% 覆盖率实测）并写入 adaptive XML； 重建两包（双语 sha `e17b6df99b2ac64f` / 快速 `d541444cef23497f`)、已 cp ~/Downloads/ 并 `gh release upload --clobber` 更新 v1.0 附件、源码已 push。另一种可能是用户看的是文件管理器里 APK 文件的空白缩略图（正常现象），安装后桌面图标才是真 logo。
+
+---
+
+## 十八、真机长期测试反馈（2026-11-03，用户本人）
+
+- **双语版（v1.5 前身 v1.4/vc14 同模型）长时间使用：无明显发热**——此前的核心担忧（162MB 大模型在手机上持续推理是否烫）解除；RTF 未逐点记录但体感流畅。
+- **识别质量**：双语版准确率明显高于快速版；**语速快时双语版基本不丢词，快速版丢词明显**。
+- 结论：**P1 默认模型档 = 双语版**（质量优先），快速版保留为老机/省电档。此结论已写进 README 与 Release v1.4/v1.5 说明。
+- 用户口径："先这么用着吧"——v1.5 图标定稿，进入稳定使用阶段。
+
+---
+
+## 十九、v1.5 方言版（SenseVoice 离线整句引擎，2026-11-03）
+
+用户拍板："那就选 SenseVoice，再做个 1.5 版本的方言版吧。"（第三个版本，独立包名可同机共存）
+
+**实现（为什么是"整句出字"）**：sherpa-onnx 里所有方言模型都是**离线模型**（SenseVoice / paraformer 系），没有流式接口可用。因此方言版 = **Silero VAD 切句 + OfflineRecognizer 整句解码**：
+- VAD 512 采样窗逐窗 `vad.compute()` 取电平；连续静音 ≥600ms 判一句结束并 flush（与流式版 0.6s 软断点同阈值），单句超 12s 强制 flush 防字幕无限不出
+- 每段在单线程 executor 上整句 `acceptWaveform + decode`，识别在后台跑、不阻塞录音
+- `AsrEngine.classify`：目录名含 `sense` → `ModelEntry(isOffline=true)`；`buildOfflineRecognizer` 用 `OfflineSenseVoiceModelConfig(language="zh", useInverseTextNormalization=true)`，tokenizer 用 `tokens.txt`（不需要 bpe.model）
+
+**模拟器端到端自测（x86_64 包，2026-11-03）**：
+```
+MODEL_LOADED sense-voice-int8-off vad=true
+SEG_COMMIT sep=space text=好我们今天来测试一下听目的实时字幕功能把语音变成大字显示在屏幕上现在的医院挂号银行办事政务服务
+SEG_COMMIT sep=space text=窗口对厅长朋友来说都是难关希望这个工具能帮上忙
+SELFTEST_DONE rtf=0.2356 text=...（同上，含"听目/厅长"两处错字，句首"各位"被 VAD 起点切掉）
+```
+- 18.3s 连续语音被切成 2 段（12s 上限触发 + 尾部），**证明长句强制 flush 生效**
+- RTF 0.2356（模拟器 x86_64，真机 arm64 预计更快）
+- 已知错字与 Mac 端 SenseVoice 一致（"听幕"→"听目"、"听障"→"厅长"）：**专有名词会听错，是模型特性不是接线问题**
+
+**构建/分发**：
+- `build.gradle.kts` 三variant：`fast` / `bilingual` / `dialect`（applicationId `com.zcode.tingmu.dialect`，app_name 听幕方言版）
+- `gen_icon.py` 徽章字新增「方」；`build-apk.sh dialect` → `听幕-方言版-v1.5.apk`（arm64 单架构）
+- **成品：197,785,969 字节（189MB），sha256 前缀 `2b74a39af25d5431`**；aapt2 校验 package/versionCode=15/versionName=1.5/label=听幕方言版/native-code=arm64-v8a
+- APK 内 icon 无 anydpi 条目（纯 PNG，8864B/xxxhdpi），徽章「方」像素与 v9 设计一致
+- 分发：`~/Downloads/听幕-方言版-v1.5.apk` + GitHub Release v1.5 第三资产 `tingmu-dialect-v1.5.apk`

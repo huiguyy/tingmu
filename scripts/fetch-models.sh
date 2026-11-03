@@ -31,5 +31,13 @@ if [ ! -f "$M/x-asr-480ms-zh-en-punct-int8/tokens.txt" ]; then
   mv "$TMP/sherpa-onnx-x-asr-480ms-streaming-zipformer-transducer-zh-en-punct-int8-2026-06-05" "$M/x-asr-480ms-zh-en-punct-int8"
 fi
 
+# 方言版模型：SenseVoice（233MB，覆盖方言+普通话+英文+粤语）
+if [ ! -f "$M/sense-voice-int8/tokens.txt" ]; then
+  dl "$GH/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09.tar.bz2" "$TMP/sv.tar.bz2"
+  tar -xf "$TMP/sv.tar.bz2" -C "$TMP"
+  rm -rf "$M/sense-voice-int8"
+  mv "$TMP/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09" "$M/sense-voice-int8"
+fi
+
 echo "models ready under $M:"
 ls "$M"

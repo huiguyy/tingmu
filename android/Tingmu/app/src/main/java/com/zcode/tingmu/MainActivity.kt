@@ -23,6 +23,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.Vad
@@ -374,6 +375,118 @@ class MainActivity : Activity() {
         startEngine(pick, source)
     }
 
+    /** 离线模型（SenseVoice）的识别管线：VAD 切短段 → 整句识别 → 出字。
+     *  离线模型没有流式接口，所以字幕是"一段说完才出"；VAD 按 0.6s 停顿切短语以压低延迟。 */
+    private fun runOfflineEngine(model: ModelEntry, source: String) {
+        var rec: OfflineRecognizer? = null
+        var vad: Vad? = null
+        val decExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            Log.i(TAG, "MODEL_LOADING " + model.id + " src=" + source + " offline=true")
+            rec = AsrEngine.buildOfflineRecognizer(model)
+            vad = AsrEngine.buildVad(this@MainActivity)
+            if (cancelFlag.get()) return
+            currentModelId = model.id
+            running.set(true)
+            starting.set(false)
+            Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null))
+            ui.post { setPhase("running") }
+            val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
+            if (src == null) {
+                ui.post { Toast.makeText(this@MainActivity, Strings.loadFail, Toast.LENGTH_SHORT).show() }
+                return
+            }
+            src.open()
+            val segRec = rec!!
+            val sbuf = ArrayList<Float>(16000 * 12)
+            var inSpeech = false
+            var silenceMs = 0
+            var lastEndMs = SystemClock.elapsedRealtime()
+            val flush = fun() {
+                if (sbuf.size < 16000 / 4) { // <0.25s 忽略
+                    sbuf.clear()
+                    return
+                }
+                val samples = FloatArray(sbuf.size) { sbuf[it] }
+                sbuf.clear()
+                val gap = SystemClock.elapsedRealtime() - lastEndMs
+                lastEndMs = SystemClock.elapsedRealtime()
+                decExec.execute {
+                    try {
+                        val t0 = System.nanoTime()
+                        val ost = segRec.createStream()
+                        ost.acceptWaveform(samples, 16000)
+                        segRec.decode(ost)
+                        val text = cleanAsrText(segRec.getResult(ost).text)
+                        val ms = (System.nanoTime() - t0) / 1e6
+                        decodeMsSum += ms
+                        decodeCalls++
+                        if (text.isNotBlank()) {
+                            commitSegment(text, sepFor(gap))
+                            ui.post { render("", dotLevel) }
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "offline decode error", e)
+                    }
+                }
+            }
+            while (running.get() && !cancelFlag.get()) {
+                val chunk = src.read() ?: break
+                if (chunk.isEmpty()) {
+                    Thread.sleep(10)
+                    continue
+                }
+                var lvl = 0f
+                if (vad != null) {
+                    var wi = 0
+                    while (wi + 512 <= chunk.size) {
+                        lvl = max(lvl, vad.compute(chunk.copyOfRange(wi, wi + 512)))
+                        wi += 512
+                    }
+                } else {
+                    var s = 0.0
+                    for (v in chunk) s += v.toDouble() * v
+                    lvl = (kotlin.math.sqrt(s / chunk.size) * 12).toFloat()
+                }
+                dotLevel = lvl
+                if (lvl > 0.4f) {
+                    inSpeech = true
+                    silenceMs = 0
+                } else if (inSpeech) {
+                    silenceMs += 100
+                }
+                if (inSpeech) for (v in chunk) sbuf.add(v)
+                if (inSpeech && silenceMs >= 600) {
+                    flush()
+                    inSpeech = false
+                    silenceMs = 0
+                } else if (sbuf.size > 16000 * 12) {
+                    flush() // 长句强制切段，避免无限积压
+                }
+                ui.post { render("", lvl) }
+            }
+            flush()
+            decExec.shutdown()
+            try { decExec.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
+            if (source == "wav" && running.get()) {
+                val dur = selftestDurSec()
+                val rtf = decodeMsSum / 1000.0 / dur
+                val fin = synchronized(finalized) { finalized.toString().trim() }
+                Log.i(TAG, "SELFTEST_DONE rtf=" + String.format("%.4f", rtf) + " text=" + fin)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "engine error", e)
+            ui.post { Toast.makeText(this, e.message ?: Strings.loadFail, Toast.LENGTH_SHORT).show() }
+        } finally {
+            try { vad?.release() } catch (_: Exception) {}
+            try { rec?.release() } catch (_: Exception) {}
+            running.set(false)
+            starting.set(false)
+            decExec.shutdown()
+            ui.post { setPhase("idle") }
+        }
+    }
+
     private fun startEngine(m: ModelEntry? = null, source: String = "mic") {
         val model = m ?: defaultModel() ?: return
         if (!starting.compareAndSet(false, true)) {
@@ -391,6 +504,10 @@ class MainActivity : Activity() {
         maxDecodeMs = 0.0
         dotLevel = 0f
         engineThread = Thread {
+            if (model.isOffline) {
+                runOfflineEngine(model, source)
+                return@Thread
+            }
             var rec: OnlineRecognizer? = null
             var st: OnlineStream? = null
             var vad: Vad? = null

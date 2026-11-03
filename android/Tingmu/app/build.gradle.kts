@@ -8,10 +8,18 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // -Pvariant=bilingual|fast：不同 applicationId + 不同应用名，两个版本可在同一手机共存
+        // -Pvariant=fast|bilingual|dialect：不同 applicationId + 不同应用名，多个版本可在同一手机共存
         val variant = (project.findProperty("variant") as? String) ?: "fast"
-        applicationId = if (variant == "bilingual") "com.zcode.tingmu.bilingual" else "com.zcode.tingmu.fast"
-        resValue("string", "app_name", if (variant == "bilingual") "听幕双语版" else "听幕快速版")
+        applicationId = when (variant) {
+            "bilingual" -> "com.zcode.tingmu.bilingual"
+            "dialect" -> "com.zcode.tingmu.dialect"
+            else -> "com.zcode.tingmu.fast"
+        }
+        resValue("string", "app_name", when (variant) {
+            "bilingual" -> "听幕双语版"
+            "dialect" -> "听幕方言版"
+            else -> "听幕快速版"
+        })
         minSdk = 24
         targetSdk = 35
         versionCode = 15
