@@ -87,8 +87,9 @@ object AsrEngine {
 
     private fun classify(dir: File, labelPrefix: String): List<ModelEntry> {
         val entries = mutableListOf<ModelEntry>()
-        // 标点模型（CT-Transformer）不是 ASR 模型，不出现在模型列表里
-        if (dir.name.contains("punct", ignoreCase = true)) return entries
+        // 标点模型（CT-Transformer）不是 ASR 模型，不出现在模型列表里。
+        // 注意只能按前缀精确匹配：x-asr 双语模型目录名里也含 "punct"，不能误伤
+        if (dir.name.startsWith("punct-ct-transformer")) return entries
         val hasCtc = dir.resolve("model.int8.onnx").isFile || dir.resolve("model.onnx").isFile
         val hasTransducer = dir.listFiles()?.any { it.name.startsWith("encoder") } == true
         // SenseVoice 等离线模型同样是 model.int8.onnx 布局，靠目录名（含 sense）区分：

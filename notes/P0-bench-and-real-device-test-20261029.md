@@ -429,3 +429,23 @@ SELFTEST_DONE rtf=0.2287
 
 **体积**：方言版 280,492,283B（267MB，三模型：SenseVoice 237MB + 标点 75MB + 流式 26MB）；快速版 76,327,464B；双语版 165,324,427B。三包均 vc16/v1.6、纯 PNG 图标、无 anydpi。
 **分发**：~/Downloads 三件 v1.6（v1.5 已删）；GitHub Release v1.6 三资产（ASCII 名）。源码待推。
+
+---
+
+## 二十一、v1.6 双语版"没有可用模型"事故（2026-11-03，用户真机发现）
+
+**现象**：用户安装 v1.6 双语版，打开提示"没有可用模型"，无法识别。
+
+**根因**：v1.6 给方言版加标点模型后，`AsrEngine.classify` 里为了不让标点模型出现在模型列表，写了
+`if (dir.name.contains("punct", ignoreCase = true)) return entries`。
+但双语模型目录名是 **`x-asr-480ms-zh-en-punct-int8`**——名字里也含 `punct`，整目录被当标点模型跳过 ⇒ `discover()` 返回空列表 ⇒ 提示没有可用模型。
+（APK 内 5 个 x-asr 文件确实都在，排除打包缺失；是纯代码过滤逻辑误伤。）
+
+**修复**：改为按前缀精确匹配 `if (dir.name.startsWith("punct-ct-transformer")) return entries`。方言版标点目录名是 `punct-ct-transformer-zh-en`，仍正确排除；x-asr 不再误伤。
+
+**验证**：
+- 模拟器装修复后的双语包（x86_64）→ `SELFTEST_MODEL all=x-asr-480ms-zh-en-punct-int8-td`、`MODEL_LOADED`、`SELFTEST_DONE rtf=0.8197`（x86 慢，手机 arm64 正常），输出带标点："各位好， 我们今天来测试一下听目的实时字幕功能， 把语音变成大字显示在屏幕上。…"
+- 快速版/方言版不受影响（快速版目录 small-ctc；方言版标点目录前缀匹配）
+- **重建双语包：165,324,427B，sha256 前缀 `dccafae4b959524c`**，~/Downloads 与 Release v1.6 资产已替换
+
+**教训**：按"目录名包含某词"过滤模型时必须用精确前缀；模型名本身常含功能词（punct），contains 会误伤。
