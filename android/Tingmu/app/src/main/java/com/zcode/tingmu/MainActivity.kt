@@ -6,16 +6,12 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.graphics.Paint
 import android.media.AudioRecord
 import android.os.Bundle
 import android.os.Debug
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.text.SpannableStringBuilder
-import android.text.Spanned
-import android.text.style.LineHeightSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -40,17 +36,6 @@ import kotlin.math.sqrt
 
 class MainActivity : Activity() {
 
-    /** 给某一行顶部加指定像素的间距：长停顿"空一行"按字高算，不依赖系统空行高度 */
-    private class ExtraTopSpan(private val addPx: Int) : LineHeightSpan {
-        override fun chooseHeight(
-            text: CharSequence, start: Int, end: Int, spanstartv: Int, v: Int,
-            fm: Paint.FontMetricsInt,
-        ) {
-            fm.ascent -= addPx
-            fm.top -= addPx
-        }
-    }
-
     private companion object {
         const val TAG = "TingmuSelfTest"
         /** 短停顿（≥0.6s）：自然换行（间距≈半个字高） */
@@ -62,6 +47,8 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var captionScroll: ScrollView
     private lateinit var captionText: TextView
+    private lateinit var captionColumn: LinearLayout
+    private val segViews = HashMap<Long, TextView>()
     private lateinit var statsText: TextView
     private lateinit var liveDot: View
     private lateinit var controlBar: LinearLayout
@@ -129,15 +116,18 @@ class MainActivity : Activity() {
         root.setBackgroundColor(bg)
         captionScreen = FrameLayout(this)
         root.addView(captionScreen, FrameLayout.LayoutParams(-1, -1))
+        captionColumn = LinearLayout(this)
+        captionColumn.orientation = LinearLayout.VERTICAL
+        captionColumn.setPadding(dp(16), dp(56), dp(16), dp(120))
         captionText = TextView(this)
         captionText.setTextColor(fg)
         captionText.textSize = FONT_SIZES[fontIdx]
         captionText.setTypeface(captionText.typeface, Typeface.BOLD)
-        captionText.setPadding(dp(16), dp(56), dp(16), dp(120))
+        captionColumn.addView(captionText)
         captionScroll = ScrollView(this)
         captionScroll.isClickable = true
         captionScroll.setBackgroundColor(Color.TRANSPARENT)
-        captionScroll.addView(captionText)
+        captionScroll.addView(captionColumn)
         captionScreen.addView(captionScroll, FrameLayout.LayoutParams(-1, -1))
         liveDot = View(this)
         val dotBg = GradientDrawable()
@@ -190,7 +180,7 @@ class MainActivity : Activity() {
             false
         }
         captionScroll.setOnTouchListener(revealOnTouch)
-        captionText.setOnTouchListener(revealOnTouch)
+        captionColumn.setOnTouchListener(revealOnTouch)
         captionScreen.setOnTouchListener(revealOnTouch)
         idlePanel.setOnTouchListener(revealOnTouch)
         idlePanel.setOnClickListener { showBar() }
@@ -328,6 +318,8 @@ class MainActivity : Activity() {
             }
         }
         synchronized(segs) { segs.clear(); nextSegId = 0L }
+        for (tv in segViews.values) captionColumn.removeView(tv)
+        segViews.clear()
         captionText.text = ""
         dotLevel = 0f
         liveDot.alpha = 0.15f
@@ -337,6 +329,7 @@ class MainActivity : Activity() {
         val (bg, fg) = THEMES[themeIdx]
         root.setBackgroundColor(bg)
         captionText.setTextColor(fg)
+        for (tv in segViews.values) tv.setTextColor(fg)
         statsText.setTextColor(fg)
         titleText.setTextColor(fg)
         val dark = bg != Color.WHITE
@@ -351,6 +344,7 @@ class MainActivity : Activity() {
     private fun setFont(idx: Int) {
         fontIdx = if (idx < 0) 0 else if (idx >= FONT_SIZES.size) FONT_SIZES.size - 1 else idx
         captionText.textSize = FONT_SIZES[fontIdx]
+        for (tv in segViews.values) tv.textSize = FONT_SIZES[fontIdx]
         prefs.edit().putInt("fontIdx", fontIdx).apply()
     }
 
@@ -819,45 +813,67 @@ class MainActivity : Activity() {
         engineThread?.interrupt()
     }
 
+    /** 段视图：与 partial 同字号/颜色 */
+    private fun makeSegView(): TextView {
+        val tv = TextView(this)
+        tv.setTextColor(THEMES[themeIdx].fg)
+        tv.textSize = FONT_SIZES[fontIdx]
+        tv.setTypeface(tv.typeface, Typeface.BOLD)
+        return tv
+    }
+
+    /** 段间额外间距（px）：短停顿=0（正常行距）；长停顿≈0.7×字号（加上行内边距约等于一行） */
+    private fun gapPx(sep: String): Int =
+        if (sep == SEP_BLANK) (captionText.textSize * 0.70f).toInt() else 0
+
     private fun render(partial: String, level: Float) {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
-        // 分隔符转富文本（以"字高"为基准，随字号缩放）：
-        //   短停顿：段间空 0.5 字高；长停顿：段间空 1.0 字高。
-        //   系统行距本身约 0.6 字高，所以短停顿要往回压、长停顿只补一点点。
-        val t = captionText.textSize
-        val shortAdj = (-0.28f * t).toInt()
-        val blankAdj = (0.07f * t).toInt()
-        val sb = SpannableStringBuilder()
-        var pendingGap = 0 // 0=无 1=短停顿 2=长停顿
-        synchronized(segs) {
-            for (sg in segs) {
-                val st = sb.length
-                sb.append(sg.text)
-                if (pendingGap != 0 && sg.text.isNotEmpty()) {
-                    val adj = if (pendingGap == 2) blankAdj else shortAdj
-                    sb.setSpan(ExtraTopSpan(adj), st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-                }
-                sb.append("\n")
-                pendingGap = if (sg.sep == SEP_BLANK) 2 else if (sg.sep == SEP_HALF) 1 else 0
+        // 每段一个 TextView：短停顿=正常行距（不加上边距），长停顿=隔一行（加约 0.7 字号的边距）。
+        // 这样段内换行保持系统正常字距，段间间距精确可控，且随字号缩放。
+        val snap = synchronized(segs) { segs.toList() }
+        var i = 0
+        val ids = HashSet<Long>()
+        for (sg in snap) {
+            ids.add(sg.id)
+            var tv = segViews[sg.id]
+            if (tv == null) {
+                tv = makeSegView()
+                segViews[sg.id] = tv
+                captionColumn.addView(tv, i) // 插在"正在说"的 partial 之前
             }
+            if (tv.text.toString() != sg.text) tv.text = sg.text
+            val lp = (tv.layoutParams as? LinearLayout.LayoutParams)
+                ?: LinearLayout.LayoutParams(-1, -2)
+            val want = if (i == 0) 0 else gapPx(snap[i - 1].sep)
+            if (lp.topMargin != want) {
+                lp.topMargin = want
+                tv.layoutParams = lp
+            }
+            i++
         }
-        val pst = sb.length
-        sb.append(partial)
-        if (pendingGap != 0 && partial.isNotEmpty()) {
-            val adj = if (pendingGap == 2) blankAdj else shortAdj
-            sb.setSpan(ExtraTopSpan(adj), pst, pst + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        for (id in segViews.keys.filter { it !in ids }) {
+            segViews.remove(id)?.let { captionColumn.removeView(it) }
         }
-        captionText.text = sb
-        // 自测用：每 300ms 打一次行布局（行顶），用于核对断句间距（字高基准）
-        val nowMs = SystemClock.elapsedRealtime()
-        if (debugLayout && nowMs - lastLayoutLogMs > 300) {
-            lastLayoutLogMs = nowMs
-            captionText.post {
-                val l = captionText.layout
-                if (l != null) {
-                    val tops = (0 until l.lineCount).joinToString(",") { l.getLineTop(it).toString() }
-                    Log.i(TAG, "LAYOUT n=" + l.lineCount + " tops=" + tops)
+        if (captionText.text.toString() != partial) captionText.text = partial
+        val plp = (captionText.layoutParams as? LinearLayout.LayoutParams)
+            ?: LinearLayout.LayoutParams(-1, -2)
+        val pWant = if (snap.isEmpty()) 0 else gapPx(snap.last().sep)
+        if (plp.topMargin != pWant) {
+            plp.topMargin = pWant
+            captionText.layoutParams = plp
+        }
+        // 自测用：每 300ms 打一次各段视图的位置，用于核对段间距
+        if (debugLayout) {
+            val nowMs = SystemClock.elapsedRealtime()
+            if (nowMs - lastLayoutLogMs > 300) {
+                lastLayoutLogMs = nowMs
+                captionColumn.post {
+                    val parts = (0 until captionColumn.childCount).map {
+                        val v = captionColumn.getChildAt(it)
+                        v.top.toString() + ":" + v.bottom
+                    }
+                    Log.i(TAG, "LAYOUTV n=" + captionColumn.childCount + " " + parts.joinToString(","))
                 }
             }
         }

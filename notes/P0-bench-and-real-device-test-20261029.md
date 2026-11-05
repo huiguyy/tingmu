@@ -619,3 +619,55 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 之前两个失败方案记录：字号 span（RelativeSizeSpan）改不了行高；把"空行"用 LineHeightSpan 压缩也压不下去（系统对空行有最小高度）——所以最终不用空行、改用下一段首字加/减间距。
 
 **成品 vc20/v1.9.1**：快速 76,920,412B sha `34a8dedc5bf6fcc9` / 双语 165,917,383B sha `0323b664a513efc7` / 方言 218,998,269B sha `3a0e9799fcc17e1d`；三包模型内容核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.1；Release v1.9.1 三资产。
+
+---
+
+## 二十四、v0.4/v0.5 悬浮字幕交互升级（2026-11-05，用户 5 条反馈）
+
+**用户需求**：①背景透明度可调（全透~黑）②字幕可自由拖动 ③横屏自适应 ④点字幕出右上角 ✕ 可关闭 ⑤大字两行+滚上去变小字（历史）。
+
+**实现（FloatingWindow 重写为可交互窗）**：
+- **双层级字幕**：下方大字两行=当前句（`CaptionEngine.viewShown`：最后一段+partial）；上方小字两行=滚出的历史（再前两段，0.62× 字号、85% 透明度）；停顿音频实测：小字"各位乘客请注意"+大字"下一站是人民广场请提前做好准备"同框截图确认
+- **透明度**：设置档 0/30/60/90/100（0=全透只剩字+阴影），prefs `bg_alpha`，`GradientDrawable.setColor((a shl 24) or base)`
+- **拖动**：首次触摸把 BOTTOM|CENTER 换算成屏幕绝对坐标转 TOP|START，MOVE 时 `updateViewLayout` 边界夹取；逐事件注入（DOWN→MOVE→MOVE→UP）实测拖动生效
+- **关闭**：点字幕 → ✕ 浮现（5s 自动隐）→ 点 ✕ → `onClose` → `stopEngine`+服务 stopSelf；实测点 ✕ 后 ServiceRecord 1→0（服务停止实证）
+- **横屏**：`Service.onConfigurationChanged → fw.onConfigChanged()`（重算宽度/夹回屏内）
+- 窗口去掉 `FLAG_NOT_TOUCHABLE`（拖动/点击需要触摸，代价=字幕区拦截点击，可拖走避让）
+
+**踩坑（全部实锤，真机也适用）**：
+1. **✕ 负 margin 悬出窗口**：命中区只剩 49×49px（窗口 touchable region=窗口 frame），点不中；改 36dp 全落窗内+正 margin 4dp
+2. **✕ GONE→VISIBLE 触发窗口重排跳动**（frame 从 [463,1885] 跳 [463,2021]，按旧坐标点击落空）；改 ✕ **INVISIBLE 占位**，窗口尺寸恒定
+3. **overlay 窗口上 View 的 click 机制收不到事件**（setOnClickListener 的 ✕ 被 touch 消费却无 onClick，N 轮复现）；✕ 改 `setOnTouchListener` + ACTION_UP 判定（与 frame onTouch 同分发路径，该路径已稳定验证）——**overlay 上的交互一律用 onTouch 不用 onClick**
+4. **tap 坐标必须按 dumpsys window 真实 frame 换算**（截图缩略坐标≠屏幕坐标，比例 1080/910；字幕窗口实际 y≈1885-2076 而非截图目测值）
+5. **adb `input swipe` 在 overlay 上不派发**（tap/逐事件 motionevent 均可）——注入器问题非产品问题，真机手指不受影响
+6. `input tap` 点 ✕（"被消费但无日志"）与点窗口外不可区分，验证要盯 ServiceRecord+全量日志双证据
+
+**交付**：`听幕·屏-v0.5.apk` **58,499,092B（arm64-only）** sha256 前缀 `b1edef6129d13fc8`（vc5/v0.5）；仓库根+~/Downloads。
+
+**模拟器已验证**：双层级截图 ✓、透明度按钮 ✓、拖动 ✓、点字幕→✕ 出现 ✓、点 ✕ → 服务停止 ✓
+**待真机验证（adb 注入≠手指）**：拖动手感/速度、✕ 命中率、横屏旋转实测、透明度观感、字幕区拦截点击的避让体验、三模式真机回归（MediaProjection 弹窗/抖音捕获/麦克风续航）
+
+**v0.6 排版修正（同日，用户真机反馈"字都挤到一块了"）**：大字行距 `setLineSpacing(5dp, 1.18f)`、小字 `(2dp, 1.15f)`、历史/当前层间距 6dp bottomMargin、窗口上下 padding 16→20dp、小字层 alpha 0.7。模拟器截图对比：两级字幕（小字"各位乘客请注意"+大字"下一站是人民广场请提前做好准备"）行距呼吸感明显。vc6/v0.6，sha256 前缀见交付行：`听幕·屏-v0.6.apk`。
+
+---
+
+## 二十七、v1.9.2 断句间距回到"正常字排列"（2026-11-05，用户："字都挤到一块了"）
+
+用户对 v1.9.1 的"按字高"方案反馈：字挤在一起，要求按正常排列——
+①短停顿=正常换行（两行之间留平时的行距，约半行）②长停顿（>2s）=中间隔一行。
+
+**根因与结论**：单 TextView 里没有可靠办法"只给某一段加行距"：
+- `RelativeSizeSpan` 改不了行高（行高按整行基础字体算）；
+- 把空行用 `LineHeightSpan` 压高度也无效（系统有空行最小高度）；
+- `LineHeightSpan` 是**段落级**的：给段首字加间距会把同段所有行一起抬高（实测每行 +103px，正是"整段行距变大"）。
+⇒ **改为每段一个 TextView**（`captionColumn` LinearLayout 垂直排列 + `segViews` 按段 id 管理），段间用精确 `topMargin` 控制：
+- 短停顿：margin=0（相邻文本块自然间距 = 系统正常行距，实测与段内换行一致）
+- 长停顿：margin≈0.70×textSize（加上行内边距≈一个行高，即"隔一行"）
+- 段内换行完全走系统正常字距；partial（正在说）是最后一个 TextView；方言回填按段 id 更新对应 TextView
+- 字号/配色切换会遍历所有段视图更新；超长时按段淘汰并移除对应视图
+
+**实测（1080×2400，textSize≈148px）**：
+- 视图位置 `LAYOUTV`：seg1 bottom=2089 → seg2 top=2089（margin 0）；seg2 bottom=2089 → seg3 top=2192（margin 103px≈0.70T）
+- 录屏帧目检：短停顿边界就是普通换行间距，长停顿边界有明显一行空白，字不再挤
+
+**成品 vc21/v1.9.2**：快速 76,920,412B sha `d85ebabbd093695a` / 双语 165,917,379B sha `fd7732b9aaf8b5a8` / 方言 218,998,265B sha `3fbb59c63d3e9fb2`；三包模型内容核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.2；Release v1.9.2 三资产。

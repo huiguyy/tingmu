@@ -38,6 +38,7 @@ class ScreenService : Service() {
     companion object {
         const val TAG = "TingmuScreen"
         const val ACTION_STOP = "com.zcode.tingmu.screen.ACTION_STOP"
+        const val ACTION_REFRESH = "com.zcode.tingmu.screen.ACTION_REFRESH"
         const val EXTRA_MODE = "mode" // env | media | ride
         const val EXTRA_SELFTEST = "selftest"
         const val EXTRA_WAV = "wav" // selftest 指定 asset 音频
@@ -105,6 +106,18 @@ class ScreenService : Service() {
             stopEngine()
             return START_NOT_STICKY
         }
+        if (intent?.action == ACTION_REFRESH) {
+            // 运行中改设置（字号/配色）：实时生效，不重启引擎
+            if (running.get()) {
+                val old = fontSp
+                val oldThemeIdx = prefs().getInt("theme_idx", 1)
+                readPrefs()
+                if (fontSp != old) fw.applyFontSize(fontSp)
+                fw.applyTheme(THEMES[prefs().getInt("theme_idx", oldThemeIdx)])
+                Log.i(TAG, "REFRESH_APPLIED font=$fontSp")
+            }
+            return START_NOT_STICKY
+        }
         if (running.get()) return START_STICKY
         readPrefs()
         mode = intent?.getStringExtra(EXTRA_MODE)
@@ -125,6 +138,10 @@ class ScreenService : Service() {
             // 点字幕上的 ✕：立即停字幕（停引擎 + 停服务）
             Log.i(TAG, "USER_CLOSE_FROM_FLOATING")
             stopEngine()
+        }
+        fw.onAlpha = { pct ->
+            // 字幕框上拉透明度：落盘，下次启动沿用
+            prefs().edit().putInt("bg_alpha", pct).apply()
         }
         engineThread = Thread { runEngine(intent) }.also { it.start() }
         return START_STICKY

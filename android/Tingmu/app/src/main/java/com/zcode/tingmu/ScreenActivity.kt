@@ -41,7 +41,6 @@ class ScreenActivity : Activity() {
     private lateinit var stayBtn: Button
     private lateinit var fontBtn: Button
     private lateinit var themeBtn: Button
-    private lateinit var bgBtn: Button
     private lateinit var fontDownBtn: Button
     private lateinit var modeEnvBtn: Button
     private lateinit var modeMediaBtn: Button
@@ -53,11 +52,7 @@ class ScreenActivity : Activity() {
     private var stayIdx = 1
     private var fontIdx = 0
     private var themeIdx = 1
-    private var bgIdx = 2 // 背景透明度档位下标（BG_ALPHAS: 0/30/60/90/100）
     private var mode = "env"
-
-    /** 字幕背景透明度档：0=全透（只有字），100=不透明黑底 */
-    private val BG_ALPHAS = intArrayOf(0, 30, 60, 90, 100)
 
     private val stays = longArrayOf(5000, 10000, 15000, 20000)
 
@@ -68,9 +63,6 @@ class ScreenActivity : Activity() {
         stayIdx = prefs.getInt("stay_idx", 1)
         fontIdx = prefs.getInt("font_idx", 0)
         themeIdx = prefs.getInt("theme_idx", 1)
-        val savedAlpha = prefs.getInt("bg_alpha", 60)
-        bgIdx = BG_ALPHAS.indexOfFirst { it == savedAlpha }.coerceAtLeast(0)
-        if (BG_ALPHAS[bgIdx] != savedAlpha) bgIdx = 2
         mode = prefs.getString("mode", "env") ?: "env"
         buildUi()
         applyTheme()
@@ -164,22 +156,23 @@ class ScreenActivity : Activity() {
 
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         fontDownBtn = smallButton("A-")
-        fontDownBtn.setOnClickListener { fontIdx = (fontIdx + FONT_SIZES.size - 1) % FONT_SIZES.size; applyTheme() }
+        fontDownBtn.setOnClickListener {
+            fontIdx = (fontIdx + FONT_SIZES.size - 1) % FONT_SIZES.size
+            applyTheme(); savePrefs(); notifyRunning()
+        }
         fontBtn = smallButton("A+")
-        fontBtn.setOnClickListener { fontIdx = (fontIdx + 1) % FONT_SIZES.size; applyTheme() }
+        fontBtn.setOnClickListener {
+            fontIdx = (fontIdx + 1) % FONT_SIZES.size
+            applyTheme(); savePrefs(); notifyRunning()
+        }
         themeBtn = smallButton(ScreenText.theme)
-        themeBtn.setOnClickListener { themeIdx = (themeIdx + 1) % THEMES.size; applyTheme() }
+        themeBtn.setOnClickListener {
+            themeIdx = (themeIdx + 1) % THEMES.size
+            applyTheme(); savePrefs(); notifyRunning()
+        }
         row2.addView(fontDownBtn); row2.addView(fontBtn); row2.addView(themeBtn)
         root.addView(row2)
-
-        val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bgBtn = smallButton(bgAlphaLabel())
-        bgBtn.setOnClickListener {
-            bgIdx = (bgIdx + 1) % BG_ALPHAS.size
-            bgBtn.text = bgAlphaLabel()
-        }
-        row3.addView(bgBtn)
-        root.addView(row3)
+        // 透明度不在设置页调——直接点字幕框上的拉条实时调（v0.7 移入悬浮窗）
 
         val saveBtn = smallButton(ScreenText.save)
         saveBtn.setOnClickListener { savePrefs(); toast(ScreenText.saved) }
@@ -221,8 +214,12 @@ class ScreenActivity : Activity() {
         else -> ScreenText.startEnv
     }
 
-    private fun bgAlphaLabel(): String =
-        ScreenText.bgAlpha + " " + if (BG_ALPHAS[bgIdx] == 0) ScreenText.bgClear else BG_ALPHAS[bgIdx].toString() + "%"
+    /** 设置页改字号/配色后：字幕在运行中就实时生效（Service ACTION_REFRESH），不用重启 */
+    private fun notifyRunning() {
+        if (ScreenService.isRunning) {
+            startService(Intent(this, ScreenService::class.java).setAction(ScreenService.ACTION_REFRESH))
+        }
+    }
 
     private fun bigButton(label: String): Button = Button(this).apply {
         text = label
@@ -445,7 +442,6 @@ class ScreenActivity : Activity() {
             .putInt("stay_idx", stayIdx)
             .putInt("font_idx", fontIdx)
             .putInt("theme_idx", themeIdx)
-            .putInt("bg_alpha", BG_ALPHAS[bgIdx])
             .putLong("stay_ms", stays[stayIdx])
             .putString("mode", mode)
             .apply()
