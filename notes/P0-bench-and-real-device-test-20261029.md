@@ -449,3 +449,69 @@ SELFTEST_DONE rtf=0.2287
 - **重建双语包：165,324,427B，sha256 前缀 `dccafae4b959524c`**，~/Downloads 与 Release v1.6 资产已替换
 
 **教训**：按"目录名包含某词"过滤模型时必须用精确前缀；模型名本身常含功能词（punct），contains 会误伤。
+
+---
+
+## 二十二、P1 听幕·屏 MVP 上线（2026-11-05，家族矩阵拍板同日）
+
+**背景**：三产品矩阵拍板（听幕不动 + 听幕·屏 + 听幕·厅，见 `docs/tingmu-family-product-plan-20261105.md`）。本节 = 听幕·屏（手机悬浮字幕 + 乘车模式）P1 开发回执。
+
+**产品与实现**：
+- 独立包 `com.zcode.tingmu.screen`（vc1 / v0.1，独立版本线），launcher=`ScreenActivity`（gradle manifestPlaceholder 按 variant 注入，听幕三版不受影响）
+- 核心机制 = **双引擎一音频流**：`MicSource` 16k CHUNK=1600 同时喂 ①KWS 哨兵常驻（`KeywordSpotter`，wenetspeech mobile int8 三件套共 **4.7MB**，`kws-wenetspeech-mobile/`）②10s 环形缓冲（ArrayDeque 160k samples）。KWS 命中触发词（默认：下一站/终点站/请下车/换乘/到站/列车进站）→ 继续收集 5s → 环形缓冲整体灌待命的流式 ASR（small-ctc 26MB，按需解码）→ 站名表 contains 匹配（归一化去空格标点）→ 悬浮字幕（`TYPE_APPLICATION_OVERLAY`，NOT_TOUCHABLE 不挡视频，黑底白字圆角条，命中浮现→停留可设 10s→淡出）+ 双震；未匹配站名降级只显示触发词（4s）；同站 30s 去抖。**非站名语音一律不上屏 = 隐私白名单**。
+- **触发词→音素转换**：KWS 模型 tokens 是带调拼音音素（非汉字）。`scripts/gen_kws_keywords.py` 构建期生成 keywords.txt（pypinyin→声母/带调韵母拆分，调号规则：a>o>e>i>u>ü，ui 调在 i/iu 调在 u），**官方 keywords.txt + test_keywords.txt 全部 16 词回归 16/16 一致**；同时生成 App 端 `HanziToPinyin.kt`（20425 字）+`PinyinTable.kt`（1302 音节）供运行时自定义触发词（`createStream(keywords=)`，OOV 字自动回落内置词表）。
+- 新文件：`KwsEngine.kt` / `FloatingWindow.kt` / `ScreenService.kt`（前台服务 type=microphone、通知含停止 action、复用听幕 requestStop 不 join 模式）/ `ScreenActivity.kt`（首屏大开关铁律、授权引导链悬浮窗→麦克风→通知、触发词/站名表/震动/停留/字号/配色设置、selftest 按钮）；`AudioSources.wavSource()` 加 assetName 缺省参数（兼容听幕调用）；`build-apk.sh screen` 分支 + `gen_icon.py` 徽章「屏」；`fetch-models.sh` 加 KWS 模型（GitHub release tag kws-models，失败提示手动下载）。
+- selftest：`am start -n com.zcode.tingmu.screen/com.zcode.tingmu.ScreenActivity --ez selftest true [--es wav audio/test_zh_16k.wav]`；asset 音频 = say(Tingting) 合成报站 "下一站，人民广场…"（7.9s，`assets/audio/station_test_16k.wav`）。
+
+**验证（模拟器 x86_64 包）**：
+- 正例：`MODEL_LOADED asr=small-ctc-zh-2025 words=6 stations=4` → `KWS_HIT keyword=下一站` → `ASR_WINDOW text=下一战人民广场请下车的乘客请提前做好准备从左侧车门下`（ASR 层"下一战"同音错不影响匹配，正是设计目标）→ `STATION_MATCH station=人民广场` → **悬浮字幕截图确认**（黑底白字圆角条叠加 UI 之上，"下一站：人民广场"大字两行，清晰可读）→ `SELFTEST_DONE rtf=0.059 hits=1 matches=1 audio=8.0s`
+- 负例（18.3s 对话音频）：`hits=0 matches=0`，无 KWS_HIT、无字幕上屏 ✓
+- 双引擎 RTF 0.06（模拟器 x86），比听幕单 ASR 0.11 还低——KWS 哨兵功耗假设成立
+
+**踩坑记录**：
+1. **`HanziToPinyin.<clinit> Method too large`**：20425 条字符串数组字面量全在类初始化超 JVM 64KB 方法上限 → 改分块字符串常量（5000 条/块，块尾逗号，运行时 split 解析；常量池引用不占方法字节码）
+2. am start 相对类名（`.ScreenActivity`）按 applicationId 解析——实际类名基于 namespace `com.zcode.tingmu`，要用全名
+3. selftest 服务 `stopSelf()`→`onDestroy`→`fw.remove()` 会在字幕显示前移除窗口 → selftest 模式 remove 延迟 15s（postDelayed 存活于主线程 looper）
+4. `FONT_SIZES` 是 Theme.kt 顶层属性不是 Theme 类成员（`Theme.FONT_SIZES` 编译错）
+5. 运行态收起设置区留下孤儿标签 → MVP 撤掉收起逻辑（设置区常显）
+6. 空 pendingKeyword 时降级 show("") 会闪空字幕条 → 加 isNotEmpty 守卫
+7. 悬浮字幕字号 54/44sp 在 1080p 两行换行 → screen 默认 fontIdx=1（36sp）+ TextView maxWidth + autoSize（26+）；两行大字幕形态接受，真机再调
+
+**交付物（全部核对 versionCode/versionName/label/native-code）**：
+- 真机包：`听幕·屏-v0.1.apk` **58,278,799B（arm64-only，KWS 4.7MB + small-ctc 26MB + 双测试音频）**，sha256 前 16 `94adba3207437fd4`；仓库根 + ~/Downloads
+- 模拟器包：`/tmp/tingmu-screen-emulator.apk`（arm64+x86_64，94MB）
+- 图标：蓝泡 + 黄徽章「屏」（gen_icon.py v9 同造型）
+
+**待真机（用户侧）**：
+1. 国行 ROM 悬浮窗授权路径（模拟器 appops 全通，真机入口深浅未知）
+2. 真实地铁噪声下 KWS 命中率/ASR 站名率——**顺手录一段车厢报站音频跑 bench CER（零成本预验证，与医院广播同批）**
+3. 功耗：40 分钟乘车实测耗电/发热
+4. 字幕字号/位置/停留时长手感
+5. 真实线路站名表粘贴后整链路（含换乘词触发）
+
+**已知边界（诚实口径）**：站名表手贴（无在线线路库）；触发词转换限常用汉字（字表 20425 字，生僻字回落内置词表）；公交/地铁报站句式差异靠触发词可编辑覆盖；纯端侧无线路数据在线更新。
+
+---
+
+## 二十二、v1.7 全线去标点 + 2 秒换行（2026-11-05，用户拍板）
+
+用户要求：①双语版/方言版不要标点 ②稍微停顿留空格 ③停顿超过 2 秒换行（原 2.5s）；并问快速版现状。
+
+**快速版原状（回答用户）**：本来就无标点（small-ctc 词表里没有标点 token）；停顿 ≥0.6s 提交一段留空格；>2.5s 升级为换行。
+
+**改动（三版统一）**：
+- `cleanAsrText` 新增标点剥离：中文标点 `[，。！？；：、（）【】《》〈〉「」『』""''…—～·]` 与英文句读 `[,.!?;:]`（数字保护，"3.14" 不拆）全部**替换成空格**再压多余空格——标点位置天然对应停顿，正好落在"停顿留空格"的产品规则上
+- `sepFor`/长停顿升级阈值 2500ms → **2000ms**
+- 方言版移除标点模型：`buildPunctuation`/`addPunct` 全删，APK 不再打包 punct-ct-transformer（**267MB → 209MB**），fetch-models.sh 不再下载
+- 流式自测日志改为打 `cleanAsrText` 后的文本（此前 SELFTEST_DONE 打原始文本，标点剥离了日志也看不出来，造成过误判）
+
+**模拟器自测（x86_64，三版全过）**：
+```
+双语: SELFTEST_DONE rtf=0.4162 text=各位好 我们今天来测试一下听目的实时字幕功能 把语音变成大字显示在屏幕上 现在的医院挂号 银行办事 政务服务窗口 对听账朋友来说都是难关 希望这个工具能   ← 标点全部变空格
+方言: dual=true（punct 标志消失）SEG_CORRECT text=好我们今天来测试一下听目的实时字幕功能把语音变成大字显示在屏幕上现在的医院挂号银行办事政务服务  rtf=0.2334
+快速: SELFTEST_DONE rtf=0.1638 text=各位好我们今天来测试一下听目的实十字幕功能…   ← 回归正常
+```
+
+**成品（vc17/v1.7）**：快速 76,716,535B sha `1f3fe77f5683b7a9` / 双语 165,713,502B sha `53656635fae75872` / 方言 218,794,388B sha `a5dac61c08ffb61c`（方言 APK 已无 punct 模型条目）。~/Downloads 换 v1.7（v1.6 已删）；Release v1.7 三资产。
+
+**注**：听幕·屏（CaptionEngine）是另一条产品线，自己的 sepFor/cleanAsrText 未动（仍 2.5s、不去标点），按屏线需求另行处理。

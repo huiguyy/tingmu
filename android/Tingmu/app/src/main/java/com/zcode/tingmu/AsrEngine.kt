@@ -7,9 +7,6 @@ import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.OfflineModelConfig
-import com.k2fsa.sherpa.onnx.OfflinePunctuation
-import com.k2fsa.sherpa.onnx.OfflinePunctuationConfig
-import com.k2fsa.sherpa.onnx.OfflinePunctuationModelConfig
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
 import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
@@ -120,28 +117,6 @@ object AsrEngine {
             ),
         )
         return OfflineRecognizer(null, config)
-    }
-
-    /** 加载标点模型（CT-Transformer，中英）。SenseVoice 本身不输出标点，方言版第二遍用它补标点。
-     *  模型不存在时返回 null（老包/只装了 ASR 模型也不影响识别）。 */
-    fun buildPunctuation(ctx: Context): OfflinePunctuation? {
-        val model = File(ctx.filesDir, "models/punct-ct-transformer-zh-en/model.int8.onnx")
-        if (!model.isFile) return null
-        return try {
-            OfflinePunctuation(
-                null,
-                OfflinePunctuationConfig(
-                    model = OfflinePunctuationModelConfig(
-                        ctTransformer = model.absolutePath,
-                        numThreads = 1,
-                        debug = false,
-                    ),
-                ),
-            )
-        } catch (e: Exception) {
-            Log.w(TAG, "punct unavailable", e)
-            null
-        }
     }
 
     /** 加载识别器；耗时数秒，必须在工作线程调用。 */

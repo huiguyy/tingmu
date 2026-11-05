@@ -23,7 +23,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import com.k2fsa.sherpa.onnx.OfflinePunctuation
 import com.k2fsa.sherpa.onnx.OfflineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineRecognizer
 import com.k2fsa.sherpa.onnx.OnlineStream
@@ -390,7 +389,6 @@ class MainActivity : Activity() {
         var rec: OfflineRecognizer? = null
         var srec: OnlineRecognizer? = null
         var sst: OnlineStream? = null
-        var punct: OfflinePunctuation? = null
         var vad: Vad? = null
         val decExec = java.util.concurrent.Executors.newSingleThreadExecutor()
         try {
@@ -403,13 +401,11 @@ class MainActivity : Activity() {
                 sst = srec.createStream()
             }
             vad = AsrEngine.buildVad(this@MainActivity)
-            // SenseVoice 不输出标点：第二遍识别完再走一遍标点模型（CT-Transformer）
-            punct = AsrEngine.buildPunctuation(this@MainActivity)
             if (cancelFlag.get()) return
             currentModelId = model.id
             running.set(true)
             starting.set(false)
-            Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null) + " dual=" + (srec != null) + " punct=" + (punct != null))
+            Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null) + " dual=" + (srec != null))
             ui.post { setPhase("running") }
             val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
             if (src == null) {
@@ -425,18 +421,6 @@ class MainActivity : Activity() {
             var silenceMs = 0
             var partial = ""
             var lastEndMs = SystemClock.elapsedRealtime()
-
-            // SenseVoice 本身不发标点，第二遍结果交给标点模型补 "，。"；标点模型缺失时原样返回
-            val addPunct = fun(t: String): String {
-                if (t.isBlank()) return t
-                val p = punct ?: return t
-                return try {
-                    p.addPunctuation(t).trim()
-                } catch (e: Exception) {
-                    Log.w(TAG, "punctuate failed", e)
-                    t
-                }
-            }
 
             // 一句结束：定格第一遍字幕（马上上屏）→ 提交方言模型重解码 → 回来后替换该段
             val flush = fun() {
@@ -470,7 +454,7 @@ class MainActivity : Activity() {
                             val ost = segRec.createStream()
                             ost.acceptWaveform(samples, 16000)
                             segRec.decode(ost)
-                            val text = addPunct(cleanAsrText(segRec.getResult(ost).text))
+                            val text = cleanAsrText(segRec.getResult(ost).text)
                             val ms = (System.nanoTime() - t0) / 1e6
                             decodeMsSum += ms
                             decodeCalls++
@@ -493,7 +477,7 @@ class MainActivity : Activity() {
                             val ost = segRec.createStream()
                             ost.acceptWaveform(samples, 16000)
                             segRec.decode(ost)
-                            val text = addPunct(cleanAsrText(segRec.getResult(ost).text))
+                            val text = cleanAsrText(segRec.getResult(ost).text)
                             val ms = (System.nanoTime() - t0) / 1e6
                             decodeMsSum += ms
                             decodeCalls++
@@ -570,7 +554,6 @@ class MainActivity : Activity() {
         } finally {
             try { sst?.release() } catch (_: Exception) {}
             try { srec?.release() } catch (_: Exception) {}
-            try { punct?.release() } catch (_: Exception) {}
             try { vad?.release() } catch (_: Exception) {}
             try { rec?.release() } catch (_: Exception) {}
             running.set(false)
@@ -646,7 +629,7 @@ class MainActivity : Activity() {
                 if (source == "wav" && running.get()) {
                     try { st?.inputFinished() } catch (_: Exception) {}
                     while (st != null && rec!!.isReady(st)) rec.decode(st)
-                    val text = rec.getResult(st).text
+                    val text = cleanAsrText(rec.getResult(st).text)
                     val durSec = selftestDurSec()
                     val rtf = decodeMsSum / 1000.0 / durSec
                     Log.i(TAG, "SELFTEST_DONE rtf=" + String.format("%.4f", rtf) + " text=" + text)
@@ -703,7 +686,7 @@ class MainActivity : Activity() {
             maxDecodeMs = max(maxDecodeMs, ms)
         }
         // VAD 软断点：说话中断 >=0.6s 就把当前段定格、在断口留一个空格；
-        // 停顿超过 2.5s 再把刚才的空格升级成换行（长停顿/换人说话时段落更清楚）。
+        // 停顿超过 2s 再把刚才的空格升级成换行（长停顿/换人说话时段落更清楚）。
         // 不依赖模型自身端点（麦克风底噪下 CTC trailing-blank 计数不准，实测会漏断）
         val now = SystemClock.elapsedRealtime()
         if (lvl > 0.4f) {
@@ -724,7 +707,7 @@ class MainActivity : Activity() {
             commitSegment(text, sepFor(gapMs))
             rec.reset(st)
             partial = ""
-        } else if (softPaused && gapMs > 2500) {
+        } else if (softPaused && gapMs > 2000) {
             // 长停顿：末尾空格升级为换行（只升级一次）
             upgradeLastSep()
         }
@@ -775,11 +758,21 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun sepFor(gapMs: Long) = if (gapMs > 2500) '\n' else ' '
+    /** 停顿/断句分隔：短停顿留空格，长停顿（>2s）换行。 */
+    private fun sepFor(gapMs: Long) = if (gapMs > 2000) '\n' else ' '
 
-    /** 剔除模型吐出的 <unk>（纯中文模型遇英文会输出它），别把 "UNK" 显示给用户；顺便压掉多余空格 */
+    /** 中英文标点：产品要求不显示任何标点，标点位置一律替换成空格（如"你好，今天"→"你好 今天"）。
+     *  英文句点做数字保护，"3.14" 不会被拆成 "314"。 */
+    private val PUNCT_CJK = Regex("[，。！？；：、（）【】《》〈〉「」『』“”‘’…—～·]")
+    private val PUNCT_ASCII = Regex("(?<![0-9])[,.!?;:](?![0-9])")
+
+    /** 剔除模型吐出的 <unk>（纯中文模型遇英文会输出它）、所有中英文标点，并压掉多余空格 */
     private fun cleanAsrText(t: String): String =
-        t.replace("<unk>", "").replace("<UNK>", "").replace(Regex(" {2,}"), " ")
+        t.replace("<unk>", "").replace("<UNK>", "")
+            .replace(PUNCT_CJK, " ")
+            .replace(PUNCT_ASCII, " ")
+            .replace(Regex(" {2,}"), " ")
+            .trim()
 
     /** 只发停止信号，绝不在主线程等待（旧版在这里 join 导致"按停止卡死/按不动"） */
     private fun requestStop() {

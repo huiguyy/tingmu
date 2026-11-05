@@ -58,6 +58,9 @@ class WavSource(private val pcm: FloatArray) : AudioSource {
     private var off = 0
     private val short = ShortArray(pcm.size) { (pcm[it] * 32767f).toInt().toShort() }
 
+    /** 音频时长（秒），selftest RTF 用 */
+    fun durationSec(): Float = pcm.size / 16000f
+
     override fun open(): Boolean = true
 
     override fun read(): FloatArray? {
@@ -82,11 +85,12 @@ class WavSource(private val pcm: FloatArray) : AudioSource {
     override fun close() {}
 
     companion object {
-        fun wavSource(ctx: android.content.Context): WavSource? {
-            val f = File(ctx.filesDir, "audio/test_zh_16k.wav")
+        /** assetName 缺省 = 听幕自测音频；听幕·屏 selftest 传 audio/station_test_16k.wav 等。 */
+        fun wavSource(ctx: android.content.Context, assetName: String = "audio/test_zh_16k.wav"): WavSource? {
+            val f = File(ctx.filesDir, assetName.replace('/', '_'))
             if (!f.isFile) {
                 try {
-                    ctx.assets.open("audio/test_zh_16k.wav").use { inp ->
+                    ctx.assets.open(assetName).use { inp ->
                         f.parentFile?.mkdirs()
                         f.outputStream().use { inp.copyTo(it) }
                     }
