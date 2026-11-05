@@ -63,6 +63,11 @@ class MainActivity : Activity() {
     private val running = AtomicBoolean(false)
     /** 会话代号：每次 startEngine 递增；旧会话遗留的解码任务不得写入新会话字幕 */
     private val sessionGen = java.util.concurrent.atomic.AtomicInteger(0)
+    /** 首装模型拷贝是否完成（后台线程做，UI 线程只等标志位） */
+    private val assetsReady = AtomicBoolean(false)
+    private var segsVersion = 0
+    private var renderedSegVer = -1
+    private var lastStatsMs = 0L
     private val starting = AtomicBoolean(false)
     private val cancelFlag = AtomicBoolean(false)
     private var engineThread: Thread? = null
@@ -101,12 +106,21 @@ class MainActivity : Activity() {
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), 1)
         }
-        if (autoSelftest) ui.post {
-            // 调试用：--es model <ModelEntry.id> 可指定自测模型（如外挂的中英双语包）
+        // 首装要把 25~165MB 模型从 assets 拷进 filesDir，放后台线程（UI 线程拷会 ANR）
+        Thread {
+            try { AsrEngine.ensureBundled(applicationContext) } catch (e: Exception) { Log.e(TAG, "preload failed", e) }
+            assetsReady.set(true)
+        }.start()
+        if (autoSelftest) {
+            // 自测也在后台解析模型后再启动，避免首装在 UI 线程触发拷贝
             val mid = intent?.getStringExtra("model")
-            val all = AsrEngine.discover(this)
-            Log.i(TAG, "SELFTEST_MODEL mid=$mid all=" + all.joinToString { it.id })
-            startEngine(all.firstOrNull { it.id == mid }, source = "wav")
+            Thread {
+                try { AsrEngine.ensureBundled(applicationContext) } catch (_: Exception) {}
+                assetsReady.set(true)
+                val all = AsrEngine.discover(applicationContext)
+                Log.i(TAG, "SELFTEST_MODEL mid=$mid all=" + all.joinToString { it.id })
+                ui.post { startEngine(all.firstOrNull { it.id == mid }, source = "wav") }
+            }.start()
         }
         // 调试用：--el autostopMs <毫秒> 到点自动停止（验证停止/重启路径）
         val autoStopMs = intent?.getIntExtra("autostopMs", -1) ?: -1
@@ -324,7 +338,7 @@ class MainActivity : Activity() {
                 startBtn.text = Strings.start
             }
         }
-        synchronized(segs) { segs.clear(); nextSegId = 0L }
+        synchronized(segs) { segs.clear(); nextSegId = 0L; segsVersion++ }
         for (tv in segViews.values) captionColumn.removeView(tv)
         segViews.clear()
         captionText.text = ""
@@ -365,6 +379,10 @@ class MainActivity : Activity() {
     }
 
     private fun showModelDialog() {
+        if (!assetsReady.get()) {
+            Toast.makeText(this, Strings.preparing, Toast.LENGTH_SHORT).show()
+            return
+        }
         val models = AsrEngine.discover(this)
         if (models.isEmpty()) {
             Toast.makeText(this, Strings.noModel, Toast.LENGTH_SHORT).show()
@@ -402,6 +420,10 @@ class MainActivity : Activity() {
         }
         if (running.get()) {
             requestStop()
+            return
+        }
+        if (!assetsReady.get()) {
+            Toast.makeText(this, Strings.preparing, Toast.LENGTH_SHORT).show()
             return
         }
         val pick = defaultModel() ?: run {
@@ -630,7 +652,7 @@ class MainActivity : Activity() {
         startBtn.text = busyLabel
         startBtn.isEnabled = false
         selftestBtn.isEnabled = false
-        synchronized(segs) { segs.clear(); nextSegId = 0L }
+        synchronized(segs) { segs.clear(); nextSegId = 0L; segsVersion++ }
         vadSilenceMs = 0L
         softPaused = false
         debugLayout = (source == "wav")
@@ -787,6 +809,7 @@ class MainActivity : Activity() {
         val id = synchronized(segs) {
             val id = nextSegId++
             segs.add(Seg(id, text, sep))
+            segsVersion++
             // 超长时丢最老的段，防止字幕无限占用内存
             var total = segs.sumOf { it.text.length }
             while (segs.size > 1 && total > 4000) {
@@ -804,6 +827,7 @@ class MainActivity : Activity() {
         synchronized(segs) {
             val s = segs.firstOrNull { it.id == id } ?: return
             s.text = text
+            segsVersion++
         }
     }
 
@@ -814,6 +838,7 @@ class MainActivity : Activity() {
             val last = segs.lastOrNull() ?: return
             if (last.sep != SEP_BLANK) {
                 last.sep = SEP_BLANK
+                segsVersion++
                 changed = true
             }
         }
@@ -910,7 +935,10 @@ class MainActivity : Activity() {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
         // 每段一个 TextView：短停顿=正常行距（不加上边距），长停顿=隔一行（加约 0.7 字号的边距）。
-        // 这样段内换行保持系统正常字距，段间间距精确可控，且随字号缩放。
+        // 段集合没变就只刷"正在说"的 partial，不做全列 diff（弱机省 CPU）。
+        val ver = synchronized(segs) { segsVersion }
+        if (ver != renderedSegVer) {
+        renderedSegVer = ver
         val snap = synchronized(segs) { segs.toList() }
         var i = 0
         val ids = HashSet<Long>()
@@ -943,6 +971,7 @@ class MainActivity : Activity() {
             plp.topMargin = pWant
             captionText.layoutParams = plp
         }
+        } // ver 变化才做全列 reconcile
         // 自测用：每 300ms 打一次各段视图的位置，用于核对段间距
         if (debugLayout) {
             val nowMs = SystemClock.elapsedRealtime()
@@ -960,14 +989,24 @@ class MainActivity : Activity() {
             }
         }
         captionScroll.post { captionScroll.fullScroll(View.FOCUS_DOWN) }
-        val avgMs = if (decodeCalls > 0) decodeMsSum / decodeCalls else 0.0
-        val rtf = avgMs / 100.0
-        val nativeMb = Debug.getNativeHeapAllocatedSize() / 1048576
-        statsText.text = "avg " + String.format("%.1f", avgMs) + "ms" +
-            " | max " + maxDecodeMs.toLong() + "ms" +
-            " | RTF " + String.format("%.2f", rtf) +
-            " | native " + nativeMb + "MB" +
-            " | " + (currentModelId ?: "-")
+        val nowMs = SystemClock.elapsedRealtime()
+        if (nowMs - lastStatsMs > 1000) { // 状态栏 1 秒一刷即可
+            lastStatsMs = nowMs
+            val avgMs = if (decodeCalls > 0) decodeMsSum / decodeCalls else 0.0
+            val rtf = avgMs / 100.0
+            val nativeMb = Debug.getNativeHeapAllocatedSize() / 1048576
+            statsText.text = "avg " + String.format("%.1f", avgMs) + "ms" +
+                " | max " + maxDecodeMs.toLong() + "ms" +
+                " | RTF " + String.format("%.2f", rtf) +
+                " | native " + nativeMb + "MB" +
+                " | " + (currentModelId ?: "-")
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 离开界面（HOME/锁屏/切走）即停止拾音——隐私优先；字幕保留在屏幕上，回来重开继续
+        if (running.get()) requestStop()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

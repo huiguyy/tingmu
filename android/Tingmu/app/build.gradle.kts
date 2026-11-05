@@ -37,8 +37,8 @@ android {
             versionCode = 8
             versionName = "0.8"
         } else {
-            versionCode = 23
-            versionName = "1.9.4"
+            versionCode = 24
+            versionName = "1.9.5"
         }
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加

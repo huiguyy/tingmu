@@ -751,3 +751,16 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 **屏项目核对**：审计列的屏 P0-1（站名表清空）/P0-2（首启授权劫持）/P1-1（onDestroy 不停引擎）在当前源码里**都已有修复注释和实现**（ScreenActivity 68-71/364、ScreenService 150-153）——审计对应的是旧版本，无需重复修。
 
 **成品 vc23/v1.9.4**：快速 76,920,412B sha `b3d19f7ae7ca286c` / 双语 165,917,383B sha `bfe807ae2897a100` / 方言 218,998,269B sha `30a948dc0e2eadd2`；三包模型核对；~/Downloads 换 v1.9.4；Release v1.9.4 三资产。
+
+---
+
+## 三十、v1.9.5 审计 P1 收尾——只管听障三版（2026-11-06，用户："先不考虑屏，主攻三版"）
+
+用户指示：屏的问题先放一边，专注快速/双语/方言三版的听障用户体验。TV 端 D-pad 遥控器项不在手机目标内，暂不做。本轮处理审计余下 P1：
+
+1. **离开界面自动停拾音（隐私）**：`onPause` → running 时 `requestStop()`。manifest 本就带 `configChanges=orientation|screenSize|screenLayout|keyboardHidden`，旋转不会走 onPause，识别不中断。字幕保留在屏幕上，回来自动重开继续。已写入 README 隐私节。
+2. **首装 ANR**：`discover→ensureBundled` 会在 UI 线程拷 25~165MB（toggleRun/defaultModel、onCreate 自测解析两个入口）。修复：onCreate 起后台线程预拷并置 `assetsReady`；toggleRun/showModelDialog 在 !assetsReady 时 toast「模型准备中，请稍候」直接返回；自测解析搬到后台线程再 ui.post startEngine。`AsrEngine.ensureBundled` 幂等，预拷与自测线程并发靠 idempotent 覆盖。
+3. **渲染省 CPU**：新增 `segsVersion`（commit/replace/upgrade/clear 时 ++），render 只在版本变化时做全列 reconcile；partial 每 100ms 照常刷；statsText 1s 一刷。
+4. 模拟器验证（独立 AVD tingmu35b，避开另一会话对 tingmu35 的占用；该 AVD data 分区限 4G 以防撑爆盘）：首装 selftest 正常（后台解析）、双击开始第二下提示准备中或正常启动、HOME 后无 FATAL、无 ANR。
+
+**成品 vc24/v1.9.5**：快速 76,936,796B sha `db6d504cd3e34168` / 双语 165,933,763B sha `a9508253ebbac197` / 方言 219,014,649B sha `43fb4cd0f0cbed3d`；三包模型核对；~/Downloads 换 v1.9.5；Release v1.9.5 三资产。
