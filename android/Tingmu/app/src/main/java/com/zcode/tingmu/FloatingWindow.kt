@@ -167,7 +167,14 @@ class FloatingWindow(private val ctx: Context) {
             }
         })
 
-        manager.addView(frame, lp)
+        // P1-3：系统 sticky 重启服务时 overlay 权限可能已被关——addView 会抛
+        // BadTokenException，不接住会在主线程 crash 并进入崩溃循环
+        try {
+            manager.addView(frame, lp)
+        } catch (e: Exception) {
+            android.util.Log.e("TingmuScreen", "悬浮窗 addView 失败（overlay 权限被关？）", e)
+            return
+        }
         wm = manager
         box = frame
         winLp = lp
@@ -267,7 +274,8 @@ class FloatingWindow(private val ctx: Context) {
                     val w = b.width.coerceAtLeast(1)
                     val hh = b.height.coerceAtLeast(1)
                     lp.x = (startX + dx).roundToInt().coerceIn(0, max(0, screenW() - w))
-                    lp.y = (startY + dy).roundToInt().coerceIn(0, max(0, screenH() - hh))
+                    // P1-2：底部留 80dp 安全区——贴到物理底边时控制条/✕ 会落进系统手势导航区被遮住点不到
+                    lp.y = (startY + dy).roundToInt().coerceIn(0, max(0, screenH() - hh - (80 * dp).toInt()))
                     manager.updateViewLayout(b, lp)
                 }
             }
@@ -355,7 +363,7 @@ class FloatingWindow(private val ctx: Context) {
                 val w = b.width.coerceAtLeast(1)
                 val hh = b.height.coerceAtLeast(1)
                 lp.x = lp.x.coerceIn(0, max(0, screenW() - w))
-                lp.y = lp.y.coerceIn(0, max(0, screenH() - hh))
+                lp.y = lp.y.coerceIn(0, max(0, screenH() - hh - (80 * dp).toInt()))
             }
             manager.updateViewLayout(b, lp)
         }

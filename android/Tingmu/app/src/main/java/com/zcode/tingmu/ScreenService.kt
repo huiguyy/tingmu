@@ -148,6 +148,9 @@ class ScreenService : Service() {
     }
 
     override fun onDestroy() {
+        // P1-1：被系统回收时真正停引擎（interrupt + caption.stop），
+        // 只置 running 标志会让 AudioRecord 阻塞读多挂几个周期
+        stopEngine()
         running.set(false)
         if (selftestMode) {
             // selftest：字幕保留 15s 供截图验证，主线程 postDelayed 在 service 销毁后仍执行

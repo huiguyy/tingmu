@@ -22,5 +22,6 @@ object Strings {
     val started = "\u5df2\u5f00\u59cb"
     val selftestDone = "\u81ea\u6d4b\u5b8c\u6210"
     val settingsLink = "\u8bbe\u7f6e\uff08\u5b57\u53f7 / \u914d\u8272 / \u6a21\u578b\uff09"
+    val stopFirst = "\u8bf7\u5148\u505c\u6b62\uff0c\u518d\u5207\u6362\u6a21\u578b" // 请先停止，再切换模型
     val busy = "\u4e0a\u4e00\u6b21\u64cd\u4f5c\u8fd8\u5728\u5904\u7406\uff0c\u8bf7\u7a0d\u5019"
 }

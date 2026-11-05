@@ -711,3 +711,43 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 
 **成品 vc22/v1.9.3**：快速 76,920,416B sha `6af1fbaf573192bf` / 双语 165,917,379B sha `be4d55c6d3eaa872` / 方言 218,998,269B sha `97304ef53da52c48`；三包模型核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.3；Release v1.9.3 三资产。
 （插曲：打包到一半磁盘被模拟器 AVD 快照 + 历史 APK 占满，清掉 AVD snapshots 2GB 与本项目旧包/临时包后恢复 10GB，再重打通过。）
+
+---
+
+## 二十六、v0.8 审计修复（2026-11-06，外部审计 6 条经代码逐条核实后全修）
+
+| # | 审计项 | 核实结论 | 修法 |
+|---|---|---|---|
+| P0-1 | 站名表/触发词重启被空串覆写 | **实锤**：编辑框只 setHint 不回填，任何启动 savePrefs() 用空 text 覆写 | onCreate 回填 `prefs.getString→setText` |
+| P0-2 | pendingAfterPerm 存 "" 导致授权后真实启动被误判 selftest | **实锤**：`wav != null` 对空串为 true → 报「测试音频缺失」 | 存 null；回调改 `!wav.isNullOrEmpty()` 双保险。模拟器验证：撤权点启动→授权后 `CAPTION_MODE selftest=false` 正常启动 ✓ |
+| P1-1 | onDestroy 只置标志不停引擎 | 成立（影响小但该修） | onDestroy 加 `stopEngine()`（interrupt + caption.stop） |
+| P1-2 | 拖到底边 ✕ 落导航区够不到 | 成立 | clamp 底部留 80dp 安全区（MOVE 与 onConfigChanged 两处） |
+| P1-3 | addView 无防护→sticky 重启崩溃循环 | **实锤**（主线程 ui.post 里 addView 抛 BadTokenException 未接） | ensureAdded addView try-catch，失败 log+return，added 不置 true |
+| P1-4 | POST_NOTIFICATIONS 从不请求 | 成立（模拟器 pm grant 掩盖了） | 权限请求加 POST_NOTIFICATIONS（SDK≥33） |
+
+**回归（模拟器 v0.8）**：P0-2 路径实证 selftest=false 正常启动；ride 正例 KWS_HIT→STATION_MATCH 人民广场 rtf 0.052 ✓。
+
+**交付**：`听幕·屏-v0.8.apk` 58,499,092B arm64 vc8/v0.8 sha `d77aeb229052cba0`；仓库根+~/Downloads；已推 111 `~/tingmu-dl/tingmu-screen-v0.8.apk`，公网 `https://gp.18.do/dl/tingmu-screen-v0.8.apk` HTTP 200（支持断点续传，晚间出口慢）。**v0.7 及以前作废**。
+
+---
+
+## 二十九、外部审计三个 P0 的核实与修复（2026-11-06，v1.9.4）
+
+另一会话对听幕双项目做了审计（结论转来本会话）。对 TV 端三个 P0 **逐条对照代码核实，全部实锤**，当日修复：
+
+1. **P0-1 停止崩溃（native use-after-free）**：`requestStop` 会 interrupt 引擎线程，`awaitTermination` 立即抛 InterruptedException 被吞，finally 随即 `rec.release()`，而后台解码线程可能还在 `segRec.decode()`。
+   修复：新增 `awaitExecutorDrain(exec, 30s)`——shutdown 后**忽略 interrupt 继续等**（250ms 轮询，30s 上限），**先排空再释放**；把原来 finally 里的 `decExec.shutdown()` 挪到释放之前。
+2. **P0-2 跨会话字幕串写**：`startEngine` 清空 segs 并把 `nextSegId` 归零，而旧会话遗留的解码任务仍持有同编号 id，回填时覆盖新会话段落。
+   修复：`sessionGen`（AtomicInteger）每次 startEngine 递增；两个解码任务开头 `if (gen != sessionGen.get()) return`——旧任务直接作废（连解码都不做）。
+3. **P0-3 运行中换模型双开引擎**：`startEngine` 只检查 `starting` 不检查 `running`。修复：running 时拒绝并 toast「请先停止，再切换模型」。
+4. **附带 P1（麦克风不释放）**：全文件无任何 `close()`，停止后 AudioRecord 持续采集；探测用的 micOpen 也开着。修复：两条引擎路径 finally `src?.close()`；micOpen 探测完立即 close；顺带删掉从未赋值的 `ar` 残留。
+
+**模拟器实测（方言版 x86，autostopMs 钩子确定性触发停止）**：
+- 运行中发第二引擎 → **MODEL_LOADING 只有 1 条**（被拒）✓
+- 12.5s 自动停止（解码在飞）→ 无 FATAL/SIGSEGV、无 "decode executor not drained"、进程存活；排空期间 SEG_CORRECT 正常落完才释放 ✓
+- 停止后立刻重启自测 → 新会话干净跑完，回填文本正确，无跨会话串写 ✓
+- 为测试加了 `--el autostopMs <ms>` 自测钩子（仅 intent 触发，正式使用无感）
+
+**屏项目核对**：审计列的屏 P0-1（站名表清空）/P0-2（首启授权劫持）/P1-1（onDestroy 不停引擎）在当前源码里**都已有修复注释和实现**（ScreenActivity 68-71/364、ScreenService 150-153）——审计对应的是旧版本，无需重复修。
+
+**成品 vc23/v1.9.4**：快速 76,920,412B sha `b3d19f7ae7ca286c` / 双语 165,917,383B sha `bfe807ae2897a100` / 方言 218,998,269B sha `30a948dc0e2eadd2`；三包模型核对；~/Downloads 换 v1.9.4；Release v1.9.4 三资产。

@@ -65,6 +65,10 @@ class ScreenActivity : Activity() {
         themeIdx = prefs.getInt("theme_idx", 1)
         mode = prefs.getString("mode", "env") ?: "env"
         buildUi()
+        // P0-1 修复：编辑框回填已保存的触发词/站名表——否则任何一次启动的 savePrefs()
+        // 会用空编辑框把用户粘贴的站名表覆写清空（ride 模式核心数据丢失）
+        prefs.getString("keywords", null)?.let { if (it.isNotBlank()) kwEdit.setText(it) }
+        prefs.getString("stations", null)?.let { if (it.isNotBlank()) stEdit.setText(it) }
         applyTheme()
         handleIntent(intent)
     }
@@ -355,8 +359,13 @@ class ScreenActivity : Activity() {
         if (mode != "media" &&
             checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
         ) {
-            pendingAfterPerm = if (selftest) wav else ""
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
+            // P0-2 修复：非 selftest 存 null（原存空串，授权回调 wav != null 误判成自测，
+            // 首次授权后点启动报「测试音频缺失」）
+            pendingAfterPerm = if (selftest) wav else null
+            // P1-4：一并请求通知权限（Android 13+ 不请求则通知栏「停止」按钮不可见）
+            val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= 33) perms.add(Manifest.permission.POST_NOTIFICATIONS)
+            requestPermissions(perms.toTypedArray(), 1)
             return
         }
         if (!selftest) {
@@ -414,7 +423,8 @@ class ScreenActivity : Activity() {
         if (requestCode == 1 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             val wav = pendingAfterPerm
             pendingAfterPerm = null
-            startEngine(selftest = wav != null, wav = wav)
+            // 空串与 null 同等对待（历史 bug 防御：空 wav 会把真实启动误判成自测）
+            startEngine(selftest = !wav.isNullOrEmpty(), wav = wav?.takeIf { it.isNotEmpty() })
         }
         refreshStatus()
     }

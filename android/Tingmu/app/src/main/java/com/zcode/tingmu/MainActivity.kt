@@ -61,6 +61,8 @@ class MainActivity : Activity() {
     private lateinit var stopBtn: Button
 
     private val running = AtomicBoolean(false)
+    /** 会话代号：每次 startEngine 递增；旧会话遗留的解码任务不得写入新会话字幕 */
+    private val sessionGen = java.util.concurrent.atomic.AtomicInteger(0)
     private val starting = AtomicBoolean(false)
     private val cancelFlag = AtomicBoolean(false)
     private var engineThread: Thread? = null
@@ -106,6 +108,9 @@ class MainActivity : Activity() {
             Log.i(TAG, "SELFTEST_MODEL mid=$mid all=" + all.joinToString { it.id })
             startEngine(all.firstOrNull { it.id == mid }, source = "wav")
         }
+        // 调试用：--el autostopMs <毫秒> 到点自动停止（验证停止/重启路径）
+        val autoStopMs = intent?.getIntExtra("autostopMs", -1) ?: -1
+        if (autoStopMs > 0) ui.postDelayed({ if (running.get()) requestStop() }, autoStopMs.toLong())
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
@@ -409,11 +414,12 @@ class MainActivity : Activity() {
     /** 方言版双通道：流式小模型先实时出字（第一遍），VAD 判一句说完后
      *  方言离线模型把这句重新解码、就地替换成更准的字幕（第二遍）。
      *  没有可用流式模型时退回"整句出字"单通道。 */
-    private fun runOfflineEngine(model: ModelEntry, source: String) {
+    private fun runOfflineEngine(model: ModelEntry, source: String, gen: Int) {
         var rec: OfflineRecognizer? = null
         var srec: OnlineRecognizer? = null
         var sst: OnlineStream? = null
         var vad: Vad? = null
+        var src: AudioSource? = null
         val decExec = java.util.concurrent.Executors.newSingleThreadExecutor()
         try {
             Log.i(TAG, "MODEL_LOADING " + model.id + " src=" + source + " offline=true")
@@ -433,12 +439,13 @@ class MainActivity : Activity() {
             debugLayout = (source == "wav")
             lastLayoutLogMs = 0L
             ui.post { setPhase("running") }
-            val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
+            src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
             if (src == null) {
                 ui.post { Toast.makeText(this@MainActivity, Strings.loadFail, Toast.LENGTH_SHORT).show() }
                 return
             }
             src.open()
+            val s: AudioSource = src
             val segRec = rec!!
             val streamRec = srec
             val dual = streamRec != null && sst != null
@@ -472,6 +479,7 @@ class MainActivity : Activity() {
                     val id = commitSegment(first, sep)
                     partial = ""
                     decExec.execute {
+                        if (gen != sessionGen.get()) return@execute // 旧会话遗留任务，禁止写入
                         try {
                             val t0 = System.nanoTime()
                             val ost = segRec.createStream()
@@ -495,6 +503,7 @@ class MainActivity : Activity() {
                     sst = streamRec!!.createStream()
                 } else {
                     decExec.execute {
+                        if (gen != sessionGen.get()) return@execute // 旧会话遗留任务，禁止写入
                         try {
                             val t0 = System.nanoTime()
                             val ost = segRec.createStream()
@@ -515,7 +524,7 @@ class MainActivity : Activity() {
                 }
             }
             while (running.get() && !cancelFlag.get()) {
-                val chunk = src.read() ?: break
+                val chunk = s.read() ?: break
                 if (chunk.isEmpty()) {
                     Thread.sleep(10)
                     continue
@@ -565,8 +574,6 @@ class MainActivity : Activity() {
                 ui.post { render(partial, lvl) }
             }
             flush(false)
-            decExec.shutdown()
-            try { decExec.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
             if (source == "wav" && running.get()) {
                 val dur = selftestDurSec()
                 val rtf = decodeMsSum / 1000.0 / dur
@@ -577,15 +584,32 @@ class MainActivity : Activity() {
             Log.e(TAG, "engine error", e)
             ui.post { Toast.makeText(this, e.message ?: Strings.loadFail, Toast.LENGTH_SHORT).show() }
         } finally {
+            // 先等解码线程真正退出，再释放识别器：否则 release 与 decode 并发 = native use-after-free
+            awaitExecutorDrain(decExec, 30)
             try { sst?.release() } catch (_: Exception) {}
             try { srec?.release() } catch (_: Exception) {}
             try { vad?.release() } catch (_: Exception) {}
             try { rec?.release() } catch (_: Exception) {}
+            try { src?.close() } catch (_: Exception) {} // 停止后必须释放麦克风
             running.set(false)
             starting.set(false)
-            decExec.shutdown()
             ui.post { setPhase("idle") }
         }
+    }
+
+    /** 关掉线程池并等任务真正跑完；awaitTermination 被 interrupt 打断也要继续等（bounded）。 */
+    private fun awaitExecutorDrain(exec: java.util.concurrent.ExecutorService, timeoutSec: Long) {
+        exec.shutdown()
+        val deadline = SystemClock.elapsedRealtime() + timeoutSec * 1000
+        var drained = false
+        while (!drained && SystemClock.elapsedRealtime() < deadline) {
+            drained = try {
+                exec.awaitTermination(250, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (e: InterruptedException) {
+                false // requestStop 会 interrupt 本线程；这里必须继续等
+            }
+        }
+        if (!drained) Log.w(TAG, "decode executor not drained in " + timeoutSec + "s")
     }
 
     private fun startEngine(m: ModelEntry? = null, source: String = "mic") {
@@ -594,6 +618,13 @@ class MainActivity : Activity() {
             Toast.makeText(this, Strings.busy, Toast.LENGTH_SHORT).show()
             return
         }
+        if (running.get()) {
+            // 运行中禁止再起一个引擎（否则两个模型交替写同一列字幕）
+            starting.set(false)
+            Toast.makeText(this, Strings.stopFirst, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val gen = sessionGen.incrementAndGet()
         cancelFlag.set(false)
         val busyLabel = Strings.loading
         startBtn.text = busyLabel
@@ -610,13 +641,13 @@ class MainActivity : Activity() {
         dotLevel = 0f
         engineThread = Thread {
             if (model.isOffline) {
-                runOfflineEngine(model, source)
+                runOfflineEngine(model, source, gen)
                 return@Thread
             }
             var rec: OnlineRecognizer? = null
             var st: OnlineStream? = null
             var vad: Vad? = null
-            var ar: AudioRecord? = null
+            var src: AudioSource? = null
             try {
                 AsrEngine.ensureBundled(this@MainActivity)
                 Log.i(TAG, "MODEL_LOADING " + model.id + " src=" + source)
@@ -631,29 +662,33 @@ class MainActivity : Activity() {
                 ui.post { setPhase("running") }
                 if (source != "wav") {
                     val micOpen = MicSource()
-                    if (!micOpen.open()) {
+                    val micOk = micOpen.open()
+                    if (!micOk) {
                         val granted = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                         val msg = if (granted) Strings.micBusy else Strings.micNoPerm
                         ui.post { Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show() }
+                        try { micOpen.close() } catch (_: Exception) {}
                         return@Thread
                     }
+                    try { micOpen.close() } catch (_: Exception) {} // 探测完即释放，正式拾音用下面的 src
                 }
-                val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
+                src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
                 if (src == null) {
                     ui.post { Toast.makeText(this@MainActivity, Strings.loadFail, Toast.LENGTH_SHORT).show() }
                     return@Thread
                 }
                 src.open()
+                val s: AudioSource = src
                 var idleReads = 0
                 while (running.get() && !cancelFlag.get()) {
-                    val chunk = src.read() ?: break
+                    val chunk = s.read() ?: break
                     if (chunk.isEmpty()) {
                         if (++idleReads > 100) break
                         Thread.sleep(20)
                         continue
                     }
                     idleReads = 0
-                    processChunk(rec, st, vad, chunk, src.level())
+                    processChunk(rec, st, vad, chunk, s.level())
                 }
                 if (source == "wav" && running.get()) {
                     try { st?.inputFinished() } catch (_: Exception) {}
@@ -668,9 +703,9 @@ class MainActivity : Activity() {
                 ui.post { Toast.makeText(this@MainActivity, e.message ?: Strings.loadFail, Toast.LENGTH_SHORT).show() }
             } finally {
                 try { st?.release() } catch (_: Exception) {}
-                try { ar?.release() } catch (_: Exception) {}
                 try { vad?.release() } catch (_: Exception) {}
                 try { rec?.release() } catch (_: Exception) {}
+                try { src?.close() } catch (_: Exception) {} // 停止后必须释放麦克风
                 running.set(false)
                 starting.set(false)
                 cancelFlag.set(false)
