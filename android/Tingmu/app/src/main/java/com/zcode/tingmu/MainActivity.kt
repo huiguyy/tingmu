@@ -123,6 +123,8 @@ class MainActivity : Activity() {
         captionText.setTextColor(fg)
         captionText.textSize = FONT_SIZES[fontIdx]
         captionText.setTypeface(captionText.typeface, Typeface.BOLD)
+        captionText.includeFontPadding = false
+        applyLineSpacing(captionText)
         captionColumn.addView(captionText)
         captionScroll = ScrollView(this)
         captionScroll.isClickable = true
@@ -344,7 +346,11 @@ class MainActivity : Activity() {
     private fun setFont(idx: Int) {
         fontIdx = if (idx < 0) 0 else if (idx >= FONT_SIZES.size) FONT_SIZES.size - 1 else idx
         captionText.textSize = FONT_SIZES[fontIdx]
-        for (tv in segViews.values) tv.textSize = FONT_SIZES[fontIdx]
+        applyLineSpacing(captionText)
+        for (tv in segViews.values) {
+            tv.textSize = FONT_SIZES[fontIdx]
+            applyLineSpacing(tv)
+        }
         prefs.edit().putInt("fontIdx", fontIdx).apply()
     }
 
@@ -813,12 +819,51 @@ class MainActivity : Activity() {
         engineThread?.interrupt()
     }
 
+    /** 字号 → lineSpacingExtra 校准值（每个字号只校准一次） */
+    private val lineFix = HashMap<Float, Float>()
+
+    /** 统一行内行距：目标行高 = 1.30 × 字号。
+     *  中文字形走回退字体，paint 的 fontMetrics 量不到真实行高，
+     *  所以等第一次真实布局（≥2 行）时按实际行距校准一次，之后同字号直接复用。 */
+    private fun applyLineSpacing(tv: TextView) {
+        val size = tv.textSize
+        val fix = lineFix[size]
+        if (fix != null) {
+            tv.setLineSpacing(fix, 1f)
+            return
+        }
+        tv.setLineSpacing(0f, 1f)
+        tv.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View, left: Int, top: Int, right: Int, bottom: Int,
+                oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int,
+            ) {
+                tv.removeOnLayoutChangeListener(this)
+                if (lineFix.containsKey(size)) return
+                val lay = tv.layout ?: return
+                if (lay.lineCount < 2) return
+                val actual = (lay.getLineTop(1) - lay.getLineTop(0)).toFloat()
+                val want = size * 1.30f
+                val delta = want - actual
+                Log.i(TAG, "TYPESET size=" + size + " actual=" + actual + " want=" + want + " delta=" + delta)
+                lineFix[size] = delta
+                // 同字号的已有视图一次性套用校准值
+                captionText.setLineSpacing(delta, 1f)
+                for (sv in segViews.values) {
+                    if (sv.textSize == size) sv.setLineSpacing(delta, 1f)
+                }
+            }
+        })
+    }
+
     /** 段视图：与 partial 同字号/颜色 */
     private fun makeSegView(): TextView {
         val tv = TextView(this)
         tv.setTextColor(THEMES[themeIdx].fg)
         tv.textSize = FONT_SIZES[fontIdx]
         tv.setTypeface(tv.typeface, Typeface.BOLD)
+        tv.includeFontPadding = false // 去掉字体自带上下留白，行高才等于设定值
+        applyLineSpacing(tv)
         return tv
     }
 
@@ -871,7 +916,9 @@ class MainActivity : Activity() {
                 captionColumn.post {
                     val parts = (0 until captionColumn.childCount).map {
                         val v = captionColumn.getChildAt(it)
-                        v.top.toString() + ":" + v.bottom
+                        val lay = (v as TextView).layout
+                        val pitch = if (lay != null && lay.lineCount > 1) (lay.getLineTop(1) - lay.getLineTop(0)).toString() else "-"
+                        v.top.toString() + ":" + v.bottom + "/p" + pitch
                     }
                     Log.i(TAG, "LAYOUTV n=" + captionColumn.childCount + " " + parts.joinToString(","))
                 }

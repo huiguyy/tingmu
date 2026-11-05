@@ -37,9 +37,8 @@ class FloatingWindow(private val ctx: Context) {
     private var added = false
     private var winLp: WindowManager.LayoutParams? = null
 
-    /** 窗口基础 flags（setVisible 按可见性追加 NOT_TOUCHABLE） */
-    private val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-        or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+    // 窗口基础 flags（setVisible 按可见性追加 NOT_TOUCHABLE）
+    private val baseFlags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
     private var hideTask: Runnable? = null
     private var panelHideTask: Runnable? = null
     private var fontSp = 28f
@@ -89,6 +88,8 @@ class FloatingWindow(private val ctx: Context) {
         )
         lp.gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
         lp.y = (72 * dp).toInt()
+        // 初始隐藏态：加触摸穿透（setVisible(true) 时去掉）
+        lp.flags = baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
 
         val frame = FrameLayout(ctx)
         val col = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
@@ -296,10 +297,17 @@ class FloatingWindow(private val ctx: Context) {
 
     // ---------- 字幕更新 ----------
 
-    /** 大字 current 最多两行（尾部对齐），小字 history 最多两行。 */
+    /** 大字 current 最多两行（尾部对齐），小字 history 最多两行。
+     *  无内容时窗口隐藏并触摸穿透（定宽空框不能挡住底下 App 的点击）。 */
     fun update(history: String, current: String) {
         ui.post {
             val b = box ?: return@post
+            if (current.isBlank() && history.isBlank()) {
+                tv?.text = ""
+                histText?.text = ""
+                setVisible(false)
+                return@post
+            }
             val density = ctx.resources.displayMetrics.density
             val usablePx = fixedWidth() - (52 * density).toInt()
             val colsBig = (usablePx / (fontSp * density)).toInt().coerceIn(6, 60) - 1
@@ -313,15 +321,15 @@ class FloatingWindow(private val ctx: Context) {
                 h.text = hist
                 h.visibility = if (hist.isBlank()) View.GONE else View.VISIBLE
             }
-            b.visibility = View.VISIBLE
+            if (b.visibility != View.VISIBLE) setVisible(true)
         }
     }
 
     fun scheduleHide(ms: Long) {
         hideTask?.let { ui.removeCallbacks(it) }
         val task = Runnable {
-            box?.visibility = View.GONE
             panel?.visibility = View.INVISIBLE
+            setVisible(false)
         }
         hideTask = task
         ui.postDelayed(task, ms)
@@ -330,8 +338,8 @@ class FloatingWindow(private val ctx: Context) {
     fun hide() {
         hideTask?.let { ui.removeCallbacks(it) }
         ui.post {
-            box?.visibility = View.GONE
             panel?.visibility = View.INVISIBLE
+            setVisible(false)
         }
     }
 

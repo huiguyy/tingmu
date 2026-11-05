@@ -671,3 +671,43 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 - 录屏帧目检：短停顿边界就是普通换行间距，长停顿边界有明显一行空白，字不再挤
 
 **成品 vc21/v1.9.2**：快速 76,920,412B sha `d85ebabbd093695a` / 双语 165,917,379B sha `fd7732b9aaf8b5a8` / 方言 218,998,265B sha `3fbb59c63d3e9fb2`；三包模型内容核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.2；Release v1.9.2 三资产。
+
+---
+
+## 二十五、v0.7 透明度入框 + 定宽 + 字号实时（2026-11-05，用户真机三轮反馈）
+
+**用户反馈**：①字幕框老变大变小→锁定宽度 ②调字号时"虚的字变了、新的字不变"→字号实时生效 ③透明度设置不生效→**透明度直接放字幕框上调：点字幕出拉条，左右拉实时变**。
+
+**实现**：
+- **定宽**：`lp.width = screenW - 48dp`（onConfigChanged 同步更新）；dump 实证 frame=[66,1710][1014,2076]=948px 恒定
+- **控制条**：点字幕 → panel 浮现（透明度 SeekBar + ✕，5s 自动收起，INVISIBLE 占位防窗口跳动）；拖滑条 `onProgressChanged→applyStyle` 实时变背景 alpha（截图实证：拖到 ~10% 背景几乎消失只剩字+阴影）；松手 `onAlpha` 回调存 prefs；设置页透明度档位按钮删除（避免双入口不同步）
+- **字号实时**：去掉 **autoSizeTextType**（根因：autoSize 抢占字号控制，调 fontSp 时当前大字被 maxTextSize 钉住不变，只有历史小字响应）；字号完全由 fontSp 控制；设置页 A+/A-/配色 → `notifyRunning()` → Service `ACTION_REFRESH` → `fw.applyFontSize/applyTheme` 运行中即时生效
+- **空内容穿透**（定宽的衍生问题）：overlay 的 touchable region 由窗口 frame 决定、View GONE 也拦截——定宽空框会挡住底下 App 整片区域。修：`setVisible()` 三联动（View 显隐 + `FLAG_NOT_TOUCHABLE` 动态开关 + updateViewLayout）；无字幕时窗口隐藏且触摸穿透
+
+**验证（模拟器）**：定宽 948px ✓；点字幕控制条浮现（滑条+✕）✓；motionevent 拖滑条背景实时变透截图 ✓；空字幕穿透（代码路径+flags 机制）
+**待真机**：滑条手感、字号切换即时性、全透观感、三模式回归
+
+**交付**：`听幕·屏-v0.7.apk`（vc7/v0.7，arm64-only），sha256 前缀见 shasum 输出。v0.6 及以前版本作废。
+
+---
+
+## 二十八、v1.9.3 行距专项（2026-11-05，用户："UI 行间距要下点功夫"）
+
+用户人在外面无法测试，要求把行距系统优化。目标（以字号 T 为基准）：
+- 行内行距 = **1.30 × T**（系统默认约 1.45，偏松）
+- 短停顿（≥0.6s）= 正常换行，与段内行距完全一致
+- 长停顿（>2s）= 中间隔一行
+- 全部随字号等比缩放
+
+**过程中挖到的真问题**：
+1. `setLineSpacing(extra)` 按 `paint.fontMetrics` 算出来的值**不生效**：中文走回退字体+字体自带 padding，实际行高（66sp 时 285px）远大于 paint 给的 213px。**修复**：段视图 `includeFontPadding=false`，并按真实布局行高校准。
+2. 用 `TextView.measure()` 的探针也不准（UNSPECIFIED 下量出 723px 的荒谬值）。**最终做法**：每个字号第一次出现 ≥2 行的真实布局时，读 `layout.getLineTop(1)-getLineTop(0)` 得到实际行距，算出 `delta = 1.30T - actual`，存进 `lineFix[size]` 并套用到所有同字号视图；之后同字号直接用缓存，避免重复校准/双重补偿。
+3. 字号切换时清空重算（`applyLineSpacing` 用缓存值或重新挂监听）。
+
+**实测（模拟器 1080×2400）**：
+- 默认字号：行距 215px → 校准后 **193px**（=1.30T）
+- 最大字号 66sp：行距 262px → 校准后 **236px**（=1.30T）
+- 最大字号像素测：普通行/短停顿间距 **65~67px**（与段内换行一致）；长停顿间距 **218px**（≈0.92 个行距，视觉上一行空白）
+
+**成品 vc22/v1.9.3**：快速 76,920,416B sha `6af1fbaf573192bf` / 双语 165,917,379B sha `be4d55c6d3eaa872` / 方言 218,998,269B sha `97304ef53da52c48`；三包模型核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.3；Release v1.9.3 三资产。
+（插曲：打包到一半磁盘被模拟器 AVD 快照 + 历史 APK 占满，清掉 AVD snapshots 2GB 与本项目旧包/临时包后恢复 10GB，再重打通过。）
