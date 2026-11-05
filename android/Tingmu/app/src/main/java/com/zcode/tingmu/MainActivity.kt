@@ -6,12 +6,16 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.Paint
 import android.media.AudioRecord
 import android.os.Bundle
 import android.os.Debug
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.LineHeightSpan
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -36,8 +40,24 @@ import kotlin.math.sqrt
 
 class MainActivity : Activity() {
 
+    /** 给某一行顶部加 extra 倍行高的间距（用于"1.5 行"分段：换行 + 半行） */
+    private class ExtraTopSpan(private val extra: Float) : LineHeightSpan {
+        override fun chooseHeight(
+            text: CharSequence, start: Int, end: Int, spanstartv: Int, v: Int,
+            fm: Paint.FontMetricsInt,
+        ) {
+            val add = ((fm.descent - fm.ascent) * extra).toInt()
+            fm.ascent -= add
+            fm.top -= add
+        }
+    }
+
     private companion object {
         const val TAG = "TingmuSelfTest"
+        /** 短停顿（≥0.6s）：换 1.5 行（换行 + 下一段头上加半行间距） */
+        const val SEP_HALF = "\n"
+        /** 长停顿（>2s）：空一行（2 行） */
+        const val SEP_BLANK = "\n\n"
     }
 
     private lateinit var root: FrameLayout
@@ -432,7 +452,7 @@ class MainActivity : Activity() {
                 }
                 val samples = FloatArray(sbuf.size) { sbuf[it] }
                 sbuf.clear()
-                val sep = if (forced) "\n" else sepFor(silenceMs)
+                val sep = if (forced) SEP_HALF else sepFor(silenceMs)
                 if (dual) {
                     var first = ""
                     try {
@@ -688,8 +708,8 @@ class MainActivity : Activity() {
             decodeCalls++
             maxDecodeMs = max(maxDecodeMs, ms)
         }
-        // VAD 软断点：说话中断 >=0.6s 就把当前段定格、在断口留一个空格；
-        // 停顿超过 2s 再把刚才的空格升级成换行（长停顿/换人说话时段落更清楚）。
+        // VAD 软断点：说话中断 >=0.6s 就把当前段定格、断口留 1.5 行；
+        // 停顿超过 2s 再把 1.5 行升级成空行（长停顿/换人说话时段落更清楚）。
         // 不依赖模型自身端点（麦克风底噪下 CTC trailing-blank 计数不准，实测会漏断）
         val now = SystemClock.elapsedRealtime()
         if (lvl > 0.4f) {
@@ -720,7 +740,7 @@ class MainActivity : Activity() {
         ui.post { render(partial, lvl) }
     }
 
-    /** 定格一段已识别文字，末尾留分隔符（短停顿空格 / 长停顿换行，不加标点）。
+    /** 定格一段已识别文字，末尾留分隔符（短停顿 1.5 行 / 长停顿空行，不加标点）。
      *  返回段 id：双通道下第二遍离线结果回来后按 id 就地替换。 */
     private fun commitSegment(text: String, sep: String): Long {
         val id = synchronized(segs) {
@@ -734,7 +754,7 @@ class MainActivity : Activity() {
             }
             id
         }
-        Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == "\n\n") "blank" else "nl") + " text=" + text)
+        Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == SEP_BLANK) "blank" else "half") + " text=" + text)
         return id
     }
 
@@ -751,8 +771,8 @@ class MainActivity : Activity() {
         var changed = false
         synchronized(segs) {
             val last = segs.lastOrNull() ?: return
-            if (last.sep != "\n\n") {
-                last.sep = "\n\n"
+            if (last.sep != SEP_BLANK) {
+                last.sep = SEP_BLANK
                 changed = true
             }
         }
@@ -764,13 +784,13 @@ class MainActivity : Activity() {
         buildString {
             for (s in segs) {
                 append(s.text)
-                append(s.sep)
+                append(if (s.sep == SEP_HALF) "\n" else s.sep)
             }
         }
     }
 
     /** 停顿/断句分隔：短停顿留空格，长停顿（>2s）换行。 */
-    private fun sepFor(gapMs: Long) = if (gapMs > 2000) "\n\n" else "\n"
+    private fun sepFor(gapMs: Long) = if (gapMs > 2000) SEP_BLANK else SEP_HALF
 
     /** 中英文标点：产品要求不显示任何标点，标点位置一律替换成空格（如"你好，今天"→"你好 今天"）。
      *  英文句点做数字保护，"3.14" 不会被拆成 "314"。 */
@@ -796,8 +816,26 @@ class MainActivity : Activity() {
     private fun render(partial: String, level: Float) {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
-        val shown = displayText() + partial
-        captionText.text = shown
+        // 分隔符转富文本：SEP_HALF=换行+下一段头上半行间距（共 1.5 行）；SEP_BLANK=空一行
+        val sb = SpannableStringBuilder()
+        var needHalfGap = false
+        synchronized(segs) {
+            for (sg in segs) {
+                val st = sb.length
+                sb.append(sg.text)
+                if (needHalfGap && sg.text.isNotEmpty()) {
+                    sb.setSpan(ExtraTopSpan(0.5f), st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                sb.append(sg.sep)
+                needHalfGap = (sg.sep == SEP_HALF)
+            }
+        }
+        val pst = sb.length
+        sb.append(partial)
+        if (needHalfGap && partial.isNotEmpty()) {
+            sb.setSpan(ExtraTopSpan(0.5f), pst, pst + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        captionText.text = sb
         captionScroll.post { captionScroll.fullScroll(View.FOCUS_DOWN) }
         val avgMs = if (decodeCalls > 0) decodeMsSum / decodeCalls else 0.0
         val rtf = avgMs / 100.0

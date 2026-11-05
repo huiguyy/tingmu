@@ -41,6 +41,7 @@ class ScreenActivity : Activity() {
     private lateinit var stayBtn: Button
     private lateinit var fontBtn: Button
     private lateinit var themeBtn: Button
+    private lateinit var bgBtn: Button
     private lateinit var fontDownBtn: Button
     private lateinit var modeEnvBtn: Button
     private lateinit var modeMediaBtn: Button
@@ -52,7 +53,11 @@ class ScreenActivity : Activity() {
     private var stayIdx = 1
     private var fontIdx = 0
     private var themeIdx = 1
+    private var bgIdx = 2 // 背景透明度档位下标（BG_ALPHAS: 0/30/60/90/100）
     private var mode = "env"
+
+    /** 字幕背景透明度档：0=全透（只有字），100=不透明黑底 */
+    private val BG_ALPHAS = intArrayOf(0, 30, 60, 90, 100)
 
     private val stays = longArrayOf(5000, 10000, 15000, 20000)
 
@@ -63,6 +68,9 @@ class ScreenActivity : Activity() {
         stayIdx = prefs.getInt("stay_idx", 1)
         fontIdx = prefs.getInt("font_idx", 0)
         themeIdx = prefs.getInt("theme_idx", 1)
+        val savedAlpha = prefs.getInt("bg_alpha", 60)
+        bgIdx = BG_ALPHAS.indexOfFirst { it == savedAlpha }.coerceAtLeast(0)
+        if (BG_ALPHAS[bgIdx] != savedAlpha) bgIdx = 2
         mode = prefs.getString("mode", "env") ?: "env"
         buildUi()
         applyTheme()
@@ -164,6 +172,15 @@ class ScreenActivity : Activity() {
         row2.addView(fontDownBtn); row2.addView(fontBtn); row2.addView(themeBtn)
         root.addView(row2)
 
+        val row3 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        bgBtn = smallButton(bgAlphaLabel())
+        bgBtn.setOnClickListener {
+            bgIdx = (bgIdx + 1) % BG_ALPHAS.size
+            bgBtn.text = bgAlphaLabel()
+        }
+        row3.addView(bgBtn)
+        root.addView(row3)
+
         val saveBtn = smallButton(ScreenText.save)
         saveBtn.setOnClickListener { savePrefs(); toast(ScreenText.saved) }
         root.addView(saveBtn)
@@ -203,6 +220,9 @@ class ScreenActivity : Activity() {
         "ride" -> ScreenText.startRide
         else -> ScreenText.startEnv
     }
+
+    private fun bgAlphaLabel(): String =
+        ScreenText.bgAlpha + " " + if (BG_ALPHAS[bgIdx] == 0) ScreenText.bgClear else BG_ALPHAS[bgIdx].toString() + "%"
 
     private fun bigButton(label: String): Button = Button(this).apply {
         text = label
@@ -425,6 +445,7 @@ class ScreenActivity : Activity() {
             .putInt("stay_idx", stayIdx)
             .putInt("font_idx", fontIdx)
             .putInt("theme_idx", themeIdx)
+            .putInt("bg_alpha", BG_ALPHAS[bgIdx])
             .putLong("stay_ms", stays[stayIdx])
             .putString("mode", mode)
             .apply()
@@ -476,4 +497,6 @@ object ScreenText {
     val on = "\u5f00" // 开
     val off = "\u5173" // 关
     val theme = "\u914d\u8272" // 配色
+    val bgAlpha = "\u900f\u660e\u5ea6" // 透明度
+    val bgClear = "\u5168\u900f" // 全透
 }

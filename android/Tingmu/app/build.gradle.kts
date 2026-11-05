@@ -34,11 +34,11 @@ android {
         minSdk = 24
         targetSdk = 35
         if (variant == "screen") {
-            versionCode = 3
-            versionName = "0.3"
+            versionCode = 5
+            versionName = "0.5"
         } else {
-            versionCode = 18
-            versionName = "1.8"
+            versionCode = 19
+            versionName = "1.9"
         }
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加

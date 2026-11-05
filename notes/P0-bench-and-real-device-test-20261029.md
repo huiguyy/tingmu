@@ -574,3 +574,22 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 - 自测音频验证完已还原（assets/audio/test_zh_16k.wav 与原文件 cmp 一致）
 
 **成品 vc18/v1.8**：快速 76,716,535B sha `5c04837f5708073c` / 双语 165,713,506B sha `0f9f7791afbd61ad` / 方言 218,794,392B sha `6029dbbb344a1779`；~/Downloads 换 v1.8；Release v1.8 三资产。
+
+---
+
+## 二十五、v1.9 短停顿改 1.5 行（2026-11-05，用户："换行给他改成一点五行"）
+
+规则再调：**短停顿（≥0.6s）= 1.5 行**（原来 1 行）；长停顿（>2s）保持空一行；12s 强制切段=1.5 行。
+
+**实现踩坑（两个方案无效，第三个才对）**：
+1. `RelativeSizeSpan(0.5)` 夹一个半号 NBSP 空行 → 行高完全不变（Android 行高按整行基础字体算，字号 span 只影响字形，不影响行盒）。
+2. 对 NBSP 行加 `LineHeightSpan` 压缩 fm 到 0.5 → 依然无效（空行的行高有系统最小/字体 padding，压不下去）。
+3. **最终方案 = `ExtraTopSpan(0.5f)` 加在"下一段第一个字"上**（chooseHeight 里 `fm.ascent/top -= 0.5*(descent-ascent)`）：换行本身 1 行 + 下一段头上半行间距 = 1.5 行。渲染时按「上一段 sep 是否 SEP_HALF」决定是否给下一段首字加 span；正在说的 partial 同样处理。
+
+**实测（720×1280 录屏逐帧量字带间距，P=正常行距 118px）**：
+- 短停顿（0.9s 测试音频）→ 段间 pitch 176px = **1.48 行** ✓
+- 长停顿（3s）→ 264px = **2.21 行**（空一行）✓ 两档区分明显
+
+**并行构建事故**：验证期间另一个会话正在跑 `build-apk.sh screen`，与我的 `build-apk.sh dialect` 共用 `assets/models` 暂存目录（脚本开头把现有目录 mv 到各自 STAGE、退出再 restore），交错导致方言包一度变成 58MB 且只含 kws+small-ctc（模型被换掉）。**等对方构建结束、确认无 gradle/build-apk 进程后单独重打**，方言包恢复 218,797,564B 且含 SenseVoice+small-ctc。教训：build-apk.sh 的 assets 暂存不是并发安全的，多会话/多任务不要同时打包。
+
+**成品 vc19/v1.9**：快速 76,716,539B sha `ba84a04b0ca76653` / 双语 165,713,506B sha `d5b210253719231f` / 方言 218,797,564B sha `2abb305c1ab5048a`；三包模型内容逐一核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9；Release v1.9 三资产。

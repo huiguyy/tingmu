@@ -37,8 +37,8 @@ class CaptionEngine(private val ctx: Context) {
     var currentModelId: String? = null
         private set
 
-    /** 每 chunk 回调（引擎线程上调；tail=尾部段落+partial 供悬浮窗，full=全文，lvl=EMA 电平） */
-    var onCaption: ((tail: String, full: String, lvl: Float) -> Unit)? = null
+    /** 每 chunk 回调（引擎线程）：history=滚上去的历史小字句，current=当前大字内容，lvl=EMA 电平 */
+    var onCaption: ((history: String, current: String, lvl: Float) -> Unit)? = null
     /** selftest 收尾（音频源耗尽或 stopAfterSec 到点） */
     var onSelftestDone: ((rtf: Float, text: String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -207,7 +207,29 @@ class CaptionEngine(private val ctx: Context) {
             upgradeLastSep()
         }
         dotLevel = dotLevel * 0.55f + lvl * 0.45f
-        onCaption?.invoke(tailShown(partial), displayText() + partial, dotLevel)
+        val (hist, cur) = viewShown(partial)
+        onCaption?.invoke(hist, cur, dotLevel)
+    }
+
+    /** 两级字幕：current=最后一段+当前半句（大字区）；history=再往前两段（小字区，滚上去的历史）。
+     *  真实长度截断由 FloatingWindow 按字号/屏宽做（它才知道容量）。 */
+    private fun viewShown(partial: String): Pair<String, String> = synchronized(segs) {
+        val n = segs.size
+        val current = if (n == 0) {
+            partial
+        } else {
+            buildString {
+                append(segs[n - 1].text)
+                append(' ')
+            } + partial
+        }
+        val hist = buildString {
+            for (i in max(0, n - 3) until (n - 1)) {
+                append(segs[i].text)
+                append(' ')
+            }
+        }
+        hist.trim() to current.trim()
     }
 
     /** 悬浮窗显示用：最后两段 + 当前半句（Live Caption 式）；再截到最新 40 字，

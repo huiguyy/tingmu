@@ -91,6 +91,7 @@ class ScreenService : Service() {
     private var vibrateOn = true
     private var stayMs = 10000L
     private var fontSp = FONT_SIZES[0]
+    private var bgAlpha = 70
 
     override fun onCreate() {
         super.onCreate()
@@ -119,7 +120,12 @@ class ScreenService : Service() {
         runningMode = mode
         // media 模式必须先以 mediaProjection 类型进前台，才能 getMediaProjection（Android 14+ 硬顺序）
         startForegroundCompat()
-        fw.show(fontSp, THEMES[prefs().getInt("theme_idx", 1)])
+        fw.show(fontSp, THEMES[prefs().getInt("theme_idx", 1)], bgAlpha)
+        fw.onClose = {
+            // 点字幕上的 ✕：立即停字幕（停引擎 + 停服务）
+            Log.i(TAG, "USER_CLOSE_FROM_FLOATING")
+            stopEngine()
+        }
         engineThread = Thread { runEngine(intent) }.also { it.start() }
         return START_STICKY
     }
@@ -146,6 +152,13 @@ class ScreenService : Service() {
         vibrateOn = p.getBoolean("vibrate", true)
         stayMs = p.getLong("stay_ms", 10000L)
         fontSp = FONT_SIZES[p.getInt("font_idx", 0).coerceIn(0, FONT_SIZES.size - 1)]
+        bgAlpha = p.getInt("bg_alpha", 70).coerceIn(0, 100)
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 横竖屏切换：字幕重算宽度并保持屏内
+        fw.onConfigChanged()
     }
 
     // ---------- 引擎主流程 ----------
@@ -185,9 +198,9 @@ class ScreenService : Service() {
     private fun runCaptionMode(selftestWavAsset: String?, projIntent: Intent?, projCode: Int = -1) {
         val eng = CaptionEngine(this)
         caption = eng
-        eng.onCaption = { tail, _, _ ->
+        eng.onCaption = { history, current, _ ->
             ui.post {
-                fw.update(tail)
+                fw.update(history, current)
                 // 静默淡出：连续字幕 5s 无更新隐藏；selftest 放宽到 15s 便于观察/截图
                 fw.scheduleHide(if (selftestMode) 15000 else 5000)
             }
@@ -421,7 +434,8 @@ class ScreenService : Service() {
 
     private fun show(text: String, stay: Long) {
         ui.post {
-            fw.update(text)
+            // ride 模式只显示站名：无历史层
+            fw.update("", text)
             fw.scheduleHide(stay)
         }
         if (vibrateOn) vibrate()
