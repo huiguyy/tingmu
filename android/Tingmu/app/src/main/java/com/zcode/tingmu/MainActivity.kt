@@ -40,23 +40,22 @@ import kotlin.math.sqrt
 
 class MainActivity : Activity() {
 
-    /** 给某一行顶部加 extra 倍行高的间距（用于"1.5 行"分段：换行 + 半行） */
-    private class ExtraTopSpan(private val extra: Float) : LineHeightSpan {
+    /** 给某一行顶部加指定像素的间距：长停顿"空一行"按字高算，不依赖系统空行高度 */
+    private class ExtraTopSpan(private val addPx: Int) : LineHeightSpan {
         override fun chooseHeight(
             text: CharSequence, start: Int, end: Int, spanstartv: Int, v: Int,
             fm: Paint.FontMetricsInt,
         ) {
-            val add = ((fm.descent - fm.ascent) * extra).toInt()
-            fm.ascent -= add
-            fm.top -= add
+            fm.ascent -= addPx
+            fm.top -= addPx
         }
     }
 
     private companion object {
         const val TAG = "TingmuSelfTest"
-        /** 短停顿（≥0.6s）：换 1.5 行（换行 + 下一段头上加半行间距） */
+        /** 短停顿（≥0.6s）：自然换行（间距≈半个字高） */
         const val SEP_HALF = "\n"
-        /** 长停顿（>2s）：空一行（2 行） */
+        /** 长停顿（>2s）：空一行（间距=一个字高，渲染时用 FixedHeightSpan 精确控高） */
         const val SEP_BLANK = "\n\n"
     }
 
@@ -87,6 +86,9 @@ class MainActivity : Activity() {
     private var softPaused = false
     /** 真实静音累计（毫秒），只在有声音时清零；用于 0.6s 断句 / >2s 空行 */
     private var vadSilenceMs = 0L
+    private var lastLoggedSegCount = -1
+    private var debugLayout = false
+    private var lastLayoutLogMs = 0L
     private var decodeMsSum = 0.0
     private var decodeCalls = 0L
     private var maxDecodeMs = 0.0
@@ -428,6 +430,8 @@ class MainActivity : Activity() {
             running.set(true)
             starting.set(false)
             Log.i(TAG, "MODEL_LOADED " + model.id + " vad=" + (vad != null) + " dual=" + (srec != null))
+            debugLayout = (source == "wav")
+            lastLayoutLogMs = 0L
             ui.post { setPhase("running") }
             val src = if (source == "wav") WavSource.wavSource(this@MainActivity) else MicSource()
             if (src == null) {
@@ -598,6 +602,8 @@ class MainActivity : Activity() {
         synchronized(segs) { segs.clear(); nextSegId = 0L }
         vadSilenceMs = 0L
         softPaused = false
+        debugLayout = (source == "wav")
+        lastLayoutLogMs = 0L
         decodeMsSum = 0.0
         decodeCalls = 0
         maxDecodeMs = 0.0
@@ -816,26 +822,45 @@ class MainActivity : Activity() {
     private fun render(partial: String, level: Float) {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
-        // 分隔符转富文本：SEP_HALF=换行+下一段头上半行间距（共 1.5 行）；SEP_BLANK=空一行
+        // 分隔符转富文本（以"字高"为基准，随字号缩放）：
+        //   短停顿：段间空 0.5 字高；长停顿：段间空 1.0 字高。
+        //   系统行距本身约 0.6 字高，所以短停顿要往回压、长停顿只补一点点。
+        val t = captionText.textSize
+        val shortAdj = (-0.28f * t).toInt()
+        val blankAdj = (0.07f * t).toInt()
         val sb = SpannableStringBuilder()
-        var needHalfGap = false
+        var pendingGap = 0 // 0=无 1=短停顿 2=长停顿
         synchronized(segs) {
             for (sg in segs) {
                 val st = sb.length
                 sb.append(sg.text)
-                if (needHalfGap && sg.text.isNotEmpty()) {
-                    sb.setSpan(ExtraTopSpan(0.5f), st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (pendingGap != 0 && sg.text.isNotEmpty()) {
+                    val adj = if (pendingGap == 2) blankAdj else shortAdj
+                    sb.setSpan(ExtraTopSpan(adj), st, st + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
-                sb.append(sg.sep)
-                needHalfGap = (sg.sep == SEP_HALF)
+                sb.append("\n")
+                pendingGap = if (sg.sep == SEP_BLANK) 2 else if (sg.sep == SEP_HALF) 1 else 0
             }
         }
         val pst = sb.length
         sb.append(partial)
-        if (needHalfGap && partial.isNotEmpty()) {
-            sb.setSpan(ExtraTopSpan(0.5f), pst, pst + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        if (pendingGap != 0 && partial.isNotEmpty()) {
+            val adj = if (pendingGap == 2) blankAdj else shortAdj
+            sb.setSpan(ExtraTopSpan(adj), pst, pst + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
         captionText.text = sb
+        // 自测用：每 300ms 打一次行布局（行顶），用于核对断句间距（字高基准）
+        val nowMs = SystemClock.elapsedRealtime()
+        if (debugLayout && nowMs - lastLayoutLogMs > 300) {
+            lastLayoutLogMs = nowMs
+            captionText.post {
+                val l = captionText.layout
+                if (l != null) {
+                    val tops = (0 until l.lineCount).joinToString(",") { l.getLineTop(it).toString() }
+                    Log.i(TAG, "LAYOUT n=" + l.lineCount + " tops=" + tops)
+                }
+            }
+        }
         captionScroll.post { captionScroll.fullScroll(View.FOCUS_DOWN) }
         val avgMs = if (decodeCalls > 0) decodeMsSum / decodeCalls else 0.0
         val rtf = avgMs / 100.0

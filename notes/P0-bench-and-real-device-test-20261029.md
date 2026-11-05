@@ -593,3 +593,29 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 **并行构建事故**：验证期间另一个会话正在跑 `build-apk.sh screen`，与我的 `build-apk.sh dialect` 共用 `assets/models` 暂存目录（脚本开头把现有目录 mv 到各自 STAGE、退出再 restore），交错导致方言包一度变成 58MB 且只含 kws+small-ctc（模型被换掉）。**等对方构建结束、确认无 gradle/build-apk 进程后单独重打**，方言包恢复 218,797,564B 且含 SenseVoice+small-ctc。教训：build-apk.sh 的 assets 暂存不是并发安全的，多会话/多任务不要同时打包。
 
 **成品 vc19/v1.9**：快速 76,716,539B sha `ba84a04b0ca76653` / 双语 165,713,506B sha `d5b210253719231f` / 方言 218,797,564B sha `2abb305c1ab5048a`；三包模型内容逐一核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9；Release v1.9 三资产。
+
+---
+
+## 二十六、v1.9.1 断句间距按"字高"重做（2026-11-05，用户真机反馈"放大后两行距离特别大"）
+
+用户要求：①换行后两行间距 = **半个字高** ②长停顿空一行 = **一个字高** ③以字高为基准，解决大字号下间距过大的问题。
+
+**实测基线（模拟器 1080×2400，字号 54sp→textSize 162px）**：
+- 正常行距（行顶到行顶）215px；字形墨高约 113px（≈0.70×textSize）
+- v1.9 短停顿间距 = 215-113 = 102px ≈ **0.90 字高**（用户说的"特别大"）
+- v1.9 长停顿间距 = 148px ≈ **1.31 字高**
+
+**方案**：两种间距都用 `ExtraTopSpan`（LineHeightSpan 子类，直接改 fm.ascent/top）加在**下一段第一个字**上，修正量按 textSize 比例给：
+- 短停顿：`-0.28 × textSize`（把系统行距 0.63T 压到 0.35T ≈ 半字高）
+- 长停顿：`+0.07 × textSize`（0.63T 补到 0.70T ≈ 一字高）
+- 渲染时把 SEP_HALF/SEP_BLANK 都转成单个 `\n` + 对应修正量的 span（不再依赖系统空行高度）；partial 同样处理
+
+**实测验证（LAYOUT 行顶日志，字号 162px）**：
+- 短停顿：段间 pitch 174px → 间距 61px = **0.54 字高** ✓
+- 长停顿：pitch 225px → 间距 112px = **0.99 字高** ✓
+- 两项均随字号等比缩放（修正量按 textSize 计算），放大字号不会再变大得离谱
+
+**顺带**：`render()` 加了自测专用的 LAYOUT 日志（仅 source=wav 时、每 300ms 一次，打印每行 lineTop），用于无截屏环境下核对间距；正式使用不输出。
+之前两个失败方案记录：字号 span（RelativeSizeSpan）改不了行高；把"空行"用 LineHeightSpan 压缩也压不下去（系统对空行有最小高度）——所以最终不用空行、改用下一段首字加/减间距。
+
+**成品 vc20/v1.9.1**：快速 76,920,412B sha `34a8dedc5bf6fcc9` / 双语 165,917,383B sha `0323b664a513efc7` / 方言 218,998,269B sha `3a0e9799fcc17e1d`；三包模型内容核对（fast=small、bilingual=x-asr、dialect=sense+small）；~/Downloads 换 v1.9.1；Release v1.9.1 三资产。

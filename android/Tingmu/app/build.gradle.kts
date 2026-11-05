@@ -37,8 +37,8 @@ android {
             versionCode = 5
             versionName = "0.5"
         } else {
-            versionCode = 19
-            versionName = "1.9"
+            versionCode = 20
+            versionName = "1.9.1"
         }
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加

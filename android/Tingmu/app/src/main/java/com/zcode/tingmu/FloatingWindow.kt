@@ -85,7 +85,7 @@ class FloatingWindow(private val ctx: Context) {
             typeface = Typeface.DEFAULT
             setShadowLayer(5f, 0f, 2f, Color.argb(200, 0, 0, 0))
             maxLines = 2
-            visibility = View.GONE
+            visibility = View.INVISIBLE
         }
         val subtitle = TextView(ctx).apply {
             typeface = Typeface.DEFAULT_BOLD
@@ -96,21 +96,30 @@ class FloatingWindow(private val ctx: Context) {
         col.addView(subtitle)
         val close = TextView(ctx).apply {
             this.text = "✕"
-            textSize = 16f
+            textSize = 18f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { cornerRadius = 15 * dp; setColor(0xCC000000.toInt()) }
-            visibility = View.GONE
+            background = GradientDrawable().apply { cornerRadius = 18 * dp; setColor(0xCC000000.toInt()) }
+            visibility = View.INVISIBLE
         }
-        val closeLp = FrameLayout.LayoutParams((30 * dp).toInt(), (30 * dp).toInt())
+        // 不悬出窗口（负 margin 命中区只剩 49×49px，真机也难点中）；36dp 全部落在窗口内
+        val closeLp = FrameLayout.LayoutParams((36 * dp).toInt(), (36 * dp).toInt())
         closeLp.gravity = Gravity.END or Gravity.TOP
-        closeLp.setMargins(0, (-12 * dp).toInt(), (-12 * dp).toInt(), 0)
+        closeLp.setMargins(0, (4 * dp).toInt(), (4 * dp).toInt(), 0)
         frame.addView(col)
         frame.addView(close, closeLp)
         frame.visibility = View.GONE
 
         frame.setOnTouchListener { _, e -> handleTouch(e) }
-        close.setOnClickListener { onClose?.invoke() }
+        // ✕ 用 touch 判定而非 setOnClickListener：overlay 窗口上 View 的 click 机制
+        // 实测收不到（frame 的 onTouch 则稳定工作），两者走同一分发路径更可靠
+        close.setOnTouchListener { _, e ->
+            if (e.actionMasked == MotionEvent.ACTION_UP) {
+                android.util.Log.i("TingmuScreen", "FW_CLOSE_TAP")
+                onClose?.invoke()
+            }
+            true
+        }
 
         manager.addView(frame, lp)
         wm = manager
@@ -202,9 +211,9 @@ class FloatingWindow(private val ctx: Context) {
     private fun toggleCloseBtn() {
         val c = closeBtn ?: return
         closeHideTask?.let { ui.removeCallbacks(it) }
-        c.visibility = if (c.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+        c.visibility = if (c.visibility == View.VISIBLE) View.INVISIBLE else View.VISIBLE
         if (c.visibility == View.VISIBLE) {
-            val task = Runnable { c.visibility = View.GONE }
+            val task = Runnable { c.visibility = View.INVISIBLE }
             closeHideTask = task
             ui.postDelayed(task, 5000)
         }
@@ -236,8 +245,8 @@ class FloatingWindow(private val ctx: Context) {
     fun scheduleHide(ms: Long) {
         hideTask?.let { ui.removeCallbacks(it) }
         val task = Runnable {
-            box?.visibility = View.GONE
-            closeBtn?.visibility = View.GONE
+            box?.visibility = View.INVISIBLE
+            closeBtn?.visibility = View.INVISIBLE
         }
         hideTask = task
         ui.postDelayed(task, ms)
@@ -246,8 +255,8 @@ class FloatingWindow(private val ctx: Context) {
     fun hide() {
         hideTask?.let { ui.removeCallbacks(it) }
         ui.post {
-            box?.visibility = View.GONE
-            closeBtn?.visibility = View.GONE
+            box?.visibility = View.INVISIBLE
+            closeBtn?.visibility = View.INVISIBLE
         }
     }
 
