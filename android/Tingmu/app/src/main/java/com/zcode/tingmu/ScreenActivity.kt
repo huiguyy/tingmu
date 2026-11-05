@@ -50,7 +50,7 @@ class ScreenActivity : Activity() {
 
     private var vibOn = true
     private var stayIdx = 1
-    private var fontIdx = 1
+    private var fontIdx = 0
     private var themeIdx = 1
     private var mode = "env"
 
@@ -61,7 +61,7 @@ class ScreenActivity : Activity() {
         prefs = getSharedPreferences("screen_prefs", MODE_PRIVATE)
         vibOn = prefs.getBoolean("vibrate", true)
         stayIdx = prefs.getInt("stay_idx", 1)
-        fontIdx = prefs.getInt("font_idx", 1)
+        fontIdx = prefs.getInt("font_idx", 0)
         themeIdx = prefs.getInt("theme_idx", 1)
         mode = prefs.getString("mode", "env") ?: "env"
         buildUi()
@@ -385,10 +385,9 @@ class ScreenActivity : Activity() {
             i.putExtra(ScreenService.EXTRA_SELFTEST, true)
             wav?.let { i.putExtra(ScreenService.EXTRA_WAV, it) }
         }
-        if (projCode >= 0 && projData != null) {
-            i.putExtra(ScreenService.EXTRA_PROJ_CODE, projCode)
-            i.putExtra(ScreenService.EXTRA_PROJ_DATA, projData)
-        }
+        // MediaProjection 的 resultData 走同进程静态传递（Intent-as-extra 在 startForegroundService 上实测会丢）
+        ProjHolder.code = projCode
+        ProjHolder.data = projData
         if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
         ui.postDelayed({ refreshStatus() }, 800)
     }
@@ -430,6 +429,13 @@ class ScreenActivity : Activity() {
             .putString("mode", mode)
             .apply()
     }
+}
+
+/** MediaProjection 授权结果的同进程传递（ScreenActivity → ScreenService）。
+ *  Intent-as-extra 在 startForegroundService 上实测会丢，故用静态持有。 */
+object ProjHolder {
+    var code: Int = -1
+    var data: Intent? = null
 }
 
 /** 文案集中 + unicode 转义（工程纪律：避免长中文串直写文件）。 */

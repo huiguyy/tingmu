@@ -515,3 +515,62 @@ SELFTEST_DONE rtf=0.2287
 **成品（vc17/v1.7）**：快速 76,716,535B sha `1f3fe77f5683b7a9` / 双语 165,713,502B sha `53656635fae75872` / 方言 218,794,388B sha `a5dac61c08ffb61c`（方言 APK 已无 punct 模型条目）。~/Downloads 换 v1.7（v1.6 已删）；Release v1.7 三资产。
 
 **注**：听幕·屏（CaptionEngine）是另一条产品线，自己的 sepFor/cleanAsrText 未动（仍 2.5s、不去标点），按屏线需求另行处理。
+
+---
+
+## 二十三、P1.5 听幕·屏三模式补齐（2026-11-05，用户拍板"把所有模式做到位"）
+
+**定位修正**：P1 把"报站"做成了产品全部，用户指出太窄。听幕·屏 = **手机屏幕上的透明字幕层**，三模式：
+- **env 环境字幕**：麦克风全量字幕悬浮在任意 App 上（听幕悬浮窗版）——身边人说话/电视声/广播都变字幕
+- **media 视频字幕**：MediaProjection + AudioPlaybackCapture 捕获手机内播放的媒体音频 → 字幕（Android 10+，抖音/B站无字幕视频实时配）
+- **ride 乘车省电**：KWS 哨兵+站名表（P1 原样保留，非站名语音不上屏）
+
+**实现**：
+- `CaptionEngine.kt`（新）：自 MainActivity 抽离的识别核心（processChunk/段落机/VAD 软断点 600ms/2500ms 语义逐行保留），纯逻辑回调输出 `(tail, full, lvl)`；**MainActivity 一行未动**（听幕三版零风险）。顺带修了听幕旧版 `src.close()` 缺失（AudioRecord 泄漏）。
+- `ProjectionSource.kt`（新）：`AudioRecord.Builder.setAudioPlaybackCaptureConfig`（注意方法名是 Config 不是 Configuration，且 AudioRecord 无 capture 构造）+ 48k→16k 三点平均下采样。
+- `ScreenService`：三模式分支；media 模式按 `FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION` 进前台（Android 14+ 必须先前台才能 getMediaProjection）；selftest 保留字幕 15s 供截图；字幕静默 5s 淡出（selftest 15s）。
+- `ScreenActivity`：三模式单选+大开关；media 走 `createScreenCaptureIntent`→onActivityResult；`ProjHolder` 静态持有 resultData。
+- Manifest：`FOREGROUND_SERVICE_MEDIA_PROJECTION` + `foregroundServiceType="microphone|mediaProjection"`；v0.2/vc2。
+
+**验证（模拟器 x86_64，Android 15）**：
+- **env**：`ENGINE_LOADED vad=true`（VAD 正常！）→ 全文识别 rtf 0.13-0.20 → 悬浮字幕截图（黑底白字圆角条，28sp/30 字 2-3 行）
+- **media**：`PROJECTION_IN code=-1 data=true` → 自播(AudioTrack USAGE_MEDIA 16k)+全屏捕获 → `SEG_COMMIT 的乘客请提前做好准备从左侧车门下车` → `SELFTEST_DONE rtf=0.091` → 字幕截图 ✓（自播首句"下一站人民广场"丢失属 AudioTrack/capture 启动窗口，链路本身成立）
+- **ride**：正例 `KWS_HIT→STATION_MATCH 人民广场` ✓；负例 18.3s 对话 `hits=0 matches=0` 不上屏 ✓
+
+**踩坑记录（全部实锤）**：
+1. **`finally` 秒杀刚启动的异步引擎**：`runCaptionMode` 里 `eng.start()` 异步返回后函数立即结束→`runEngine` 的 finally 对还在加载的引擎调 `stop()` interrupt。首测表现只是"卡在 VAD"的假象。修：`CaptionEngine.awaitDone()`（join，服务线程专用）在 runCaptionMode 末尾等待。
+2. **WavSource 非实时**：18.3s 音频瞬间灌完，VAD 600ms 静默软断点永不触发→全程 partial 整段显示、字幕条 6 行。修：selftest 按 100ms/chunk 节流（`pace`）。
+3. **Intent-as-extra 丢 resultData**：`putExtra(EXTRA_PROJ_DATA, Intent)` 传到 Service 变 null（startForegroundService 路径实测）。改 `ProjHolder` 静态持有。另注意 `RESULT_OK == -1`，别把 `projCode < 0` 当无效。
+4. **悬浮字幕字号/长度**：36sp/40 字→4-6 行占屏。定：默认 28sp（fontIdx=0）+ `takeLast(30)` 字。
+5. 保留 VAD 看门狗（3s 超时降级 RMS）：真机 arm64 无问题，模拟器防御性保留。
+
+**交付**：`听幕·屏-v0.2.apk` **58,295,219B（arm64-only）** sha256 前缀 `4eada2a3999cb72e`；已核对 vc2/v0.2/label/launcher；仓库根+~/Downloads。
+
+**真机待验（用户侧）**：①MediaProjection 弹窗在国产 ROM 的形态（Android 15 有"单应用/整个屏幕"选择，**看视频场景选"整个屏幕"或选目标 App**）②抖音/快手捕获可行性（个别 App 防捕获时无音频）③环境字幕麦克风常驻的耗电/发热 ④字幕位置手感（底部 72dp）⑤后台保活（通知栏常驻+停止按钮）。
+
+**v0.3 追加（同日，用户指定"悬浮字幕最多两行或一行滚动"）**：FloatingWindow 定 `maxLines=2` + 按屏宽/字号动态算每行容量（`(屏宽px - 104dp) / (字号px) - 1`），超长 `takeLast(cols*2)` 尾部对齐——最新说的永远可见，绝不超两行。版本 vc3/v0.3，模拟器截图确认双行形态。真机手感（字号/停留）留待用户实测调。
+
+---
+
+## 二十四、v1.8 断句改版：停顿换行、2 秒空行（2026-11-05，用户拍板）
+
+用户要求：**停顿空格→换行，原换行→空一行**。三版统一：
+- 停顿 ≥0.6s → `\n`（换行）
+- 停顿 >2s → `\n\n`（空一行）
+- 12s 长句强制切段只 `\n`（不算真实停顿，避免连续说话每 12s 吐空行）
+
+**改版中发现并修掉两个真 bug（v1.7 的"2 秒换行"其实从未生效）**：
+1. **流式路径**：端点（endpoint）触发时把 `lastVoiceMs=now` 重置，静音计时永远到不了 2s，upgrade 分支是死代码。修复=新增 `vadSilenceMs` 字段，按音频块真实累计静音、只在有声音时清零，端点不再重置。
+2. **方言路径**：`sepFor(gap)` 的 gap 是"距上次 flush 的时长"（含整段说话时间），几乎必 >2s ⇒ 每段都被判成长停顿。修复=flush 用真实 `silenceMs`；断句后静音继续累计，>2s 再 `upgradeLastSep()`。
+
+**验证（3 秒静音测试音频，fast/dialect x86_64 包）**：
+```
+fast:    SEG_COMMIT sep=nl text=各位好…显示在屏幕上
+         SEG_BLANK 静音>2s，上一段后留空行
+         抓屏：第一段 → 空一行 → 第二段（可视确认）
+dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CORRECT 正常回填，rtf=0.2184
+```
+- `upgradeLastSep` 改为幂等（已是空行不重复写/不重复打日志）
+- 自测音频验证完已还原（assets/audio/test_zh_16k.wav 与原文件 cmp 一致）
+
+**成品 vc18/v1.8**：快速 76,716,535B sha `5c04837f5708073c` / 双语 165,713,506B sha `0f9f7791afbd61ad` / 方言 218,794,392B sha `6029dbbb344a1779`；~/Downloads 换 v1.8；Release v1.8 三资产。

@@ -60,11 +60,13 @@ class MainActivity : Activity() {
     private var engineThread: Thread? = null
     private val ui = Handler(Looper.getMainLooper())
     /** 已定格的段落：双通道下方言模型回填时要就地替换，所以按段存而不是拼成一个大串 */
-    private class Seg(val id: Long, var text: String, var sep: Char)
+    private class Seg(val id: Long, var text: String, var sep: String)
     private val segs = ArrayList<Seg>()
     private var nextSegId = 0L
     private var lastVoiceMs = 0L
     private var softPaused = false
+    /** 真实静音累计（毫秒），只在有声音时清零；用于 0.6s 断句 / >2s 空行 */
+    private var vadSilenceMs = 0L
     private var decodeMsSum = 0.0
     private var decodeCalls = 0L
     private var maxDecodeMs = 0.0
@@ -418,12 +420,11 @@ class MainActivity : Activity() {
             val dual = streamRec != null && sst != null
             val sbuf = ArrayList<Float>(16000 * 12)
             var inSpeech = false
-            var silenceMs = 0
+            var silenceMs = 0L
             var partial = ""
-            var lastEndMs = SystemClock.elapsedRealtime()
 
             // 一句结束：定格第一遍字幕（马上上屏）→ 提交方言模型重解码 → 回来后替换该段
-            val flush = fun() {
+            val flush = fun(forced: Boolean) {
                 if (sbuf.size < 16000 / 4) { // <0.25s 忽略
                     sbuf.clear()
                     partial = ""
@@ -431,9 +432,7 @@ class MainActivity : Activity() {
                 }
                 val samples = FloatArray(sbuf.size) { sbuf[it] }
                 sbuf.clear()
-                val gap = SystemClock.elapsedRealtime() - lastEndMs
-                lastEndMs = SystemClock.elapsedRealtime()
-                val sep = sepFor(gap)
+                val sep = if (forced) "\n" else sepFor(silenceMs)
                 if (dual) {
                     var first = ""
                     try {
@@ -513,8 +512,9 @@ class MainActivity : Activity() {
                 if (lvl > 0.4f) {
                     inSpeech = true
                     silenceMs = 0
-                } else if (inSpeech) {
-                    silenceMs += 100
+                } else {
+                    // 真实静音累计：断句后继续累计，超过 2s 把上一段升级成空行
+                    silenceMs += chunk.size * 1000L / 16000
                 }
                 if (inSpeech) for (v in chunk) sbuf.add(v)
                 // 第一遍流式识别：实时出字
@@ -531,15 +531,16 @@ class MainActivity : Activity() {
                     }
                 }
                 if (inSpeech && silenceMs >= 600) {
-                    flush()
+                    flush(false)
                     inSpeech = false
-                    silenceMs = 0
                 } else if (sbuf.size > 16000 * 12) {
-                    flush() // 长句强制切段，避免无限积压
+                    flush(true) // 长句强制切段：不算真实停顿，只换一行
+                } else if (!inSpeech && silenceMs > 2000) {
+                    upgradeLastSep() // 长停顿：上一段后留空行
                 }
                 ui.post { render(partial, lvl) }
             }
-            flush()
+            flush(false)
             decExec.shutdown()
             try { decExec.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS) } catch (_: Exception) {}
             if (source == "wav" && running.get()) {
@@ -575,6 +576,8 @@ class MainActivity : Activity() {
         startBtn.isEnabled = false
         selftestBtn.isEnabled = false
         synchronized(segs) { segs.clear(); nextSegId = 0L }
+        vadSilenceMs = 0L
+        softPaused = false
         decodeMsSum = 0.0
         decodeCalls = 0
         maxDecodeMs = 0.0
@@ -691,24 +694,27 @@ class MainActivity : Activity() {
         val now = SystemClock.elapsedRealtime()
         if (lvl > 0.4f) {
             lastVoiceMs = now
+            vadSilenceMs = 0
             softPaused = false
+        } else {
+            // 真实静音累计：不因模型端点而重置，否则 >2s 永远到不了
+            vadSilenceMs += chunk.size * 1000L / 16000
         }
-        val gapMs = now - lastVoiceMs
         val text = cleanAsrText(rec.getResult(st).text)
         var partial = text
         if (rec.isEndpoint(st)) {
-            if (text.isNotBlank()) commitSegment(text, sepFor(gapMs))
+            if (text.isNotBlank()) commitSegment(text, sepFor(vadSilenceMs))
             rec.reset(st)
             lastVoiceMs = now
-            softPaused = false
-            partial = ""
-        } else if (!softPaused && gapMs > 600 && text.isNotBlank()) {
             softPaused = true
-            commitSegment(text, sepFor(gapMs))
+            partial = ""
+        } else if (!softPaused && vadSilenceMs >= 600 && text.isNotBlank()) {
+            softPaused = true
+            commitSegment(text, sepFor(vadSilenceMs))
             rec.reset(st)
             partial = ""
-        } else if (softPaused && gapMs > 2000) {
-            // 长停顿：末尾空格升级为换行（只升级一次）
+        } else if (softPaused && vadSilenceMs > 2000) {
+            // 长停顿：上一段末尾升级成空行（幂等，只记一次）
             upgradeLastSep()
         }
         ui.post { render(partial, lvl) }
@@ -716,7 +722,7 @@ class MainActivity : Activity() {
 
     /** 定格一段已识别文字，末尾留分隔符（短停顿空格 / 长停顿换行，不加标点）。
      *  返回段 id：双通道下第二遍离线结果回来后按 id 就地替换。 */
-    private fun commitSegment(text: String, sep: Char): Long {
+    private fun commitSegment(text: String, sep: String): Long {
         val id = synchronized(segs) {
             val id = nextSegId++
             segs.add(Seg(id, text, sep))
@@ -728,7 +734,7 @@ class MainActivity : Activity() {
             }
             id
         }
-        Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == '\n') "\\n" else "space") + " text=" + text)
+        Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == "\n\n") "blank" else "nl") + " text=" + text)
         return id
     }
 
@@ -742,10 +748,15 @@ class MainActivity : Activity() {
 
     /** 长停顿：把最后一段的分隔符从空格升级为换行 */
     private fun upgradeLastSep() {
+        var changed = false
         synchronized(segs) {
             val last = segs.lastOrNull() ?: return
-            if (last.sep == ' ') last.sep = '\n'
+            if (last.sep != "\n\n") {
+                last.sep = "\n\n"
+                changed = true
+            }
         }
+        if (changed) Log.i(TAG, "SEG_BLANK 静音>2s，上一段后留空行")
     }
 
     /** 当前全部字幕（已定格段 + 间分隔符），供渲染与自测日志用 */
@@ -759,7 +770,7 @@ class MainActivity : Activity() {
     }
 
     /** 停顿/断句分隔：短停顿留空格，长停顿（>2s）换行。 */
-    private fun sepFor(gapMs: Long) = if (gapMs > 2000) '\n' else ' '
+    private fun sepFor(gapMs: Long) = if (gapMs > 2000) "\n\n" else "\n"
 
     /** 中英文标点：产品要求不显示任何标点，标点位置一律替换成空格（如"你好，今天"→"你好 今天"）。
      *  英文句点做数字保护，"3.14" 不会被拆成 "314"。 */

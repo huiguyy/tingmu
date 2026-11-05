@@ -67,6 +67,9 @@ class CaptionEngine(private val ctx: Context) {
                 Log.i(TAG, "ENGINE_LOADED ${model.id} vad=${vad != null}")
                 src = source
                 if (!src.open()) throw IllegalStateException("音频源打开失败")
+                // WAV selftest 的读取是非实时的（瞬间灌完）→ VAD 的 600ms 静默软断点永不触发，
+                // 全程显示未定稿 partial。selftest 时按 100ms/chunk 节流使回放实时化。
+                val pace = selftestAudioSec > 0f
                 var idleReads = 0
                 var samplesSeen = 0L
                 while (running.get() && !cancelFlag.get()) {
@@ -85,9 +88,12 @@ class CaptionEngine(private val ctx: Context) {
                     idleReads = 0
                     samplesSeen += chunk.size
                     processChunk(rec, st, vad, chunk)
+                    if (pace) {
+                        try { Thread.sleep(100) } catch (_: InterruptedException) { break }
+                    }
                     if (stopAfterSec > 0f && samplesSeen >= (stopAfterSec * 16000).toLong()) break
                 }
-                if (selftestAudioSec > 0f) {
+                if (selftestAudioSec > 0f || stopAfterSec > 0f) {
                     try {
                         val r = rec
                         val s = st
@@ -95,7 +101,8 @@ class CaptionEngine(private val ctx: Context) {
                             s.inputFinished()
                             while (r.isReady(s)) r.decode(s)
                             val text = displayText() + cleanAsrText(r.getResult(s).text)
-                            val rtf = if (selftestAudioSec > 0) (decodeMsSum / 1000.0 / selftestAudioSec).toFloat() else 0f
+                            val audioSec = if (samplesSeen > 0) samplesSeen / 16000f else selftestAudioSec
+                            val rtf = if (audioSec > 0f) (decodeMsSum / 1000.0 / audioSec).toFloat() else 0f
                             Log.i(TAG, "SELFTEST_DONE rtf=%.3f text=%s".format(rtf, text))
                             onSelftestDone?.invoke(rtf, text)
                         }
@@ -123,6 +130,16 @@ class CaptionEngine(private val ctx: Context) {
         cancelFlag.set(true)
         running.set(false)
         engineThread?.interrupt()
+    }
+
+    /** 供 Service 的引擎线程等待识别线程自然结束（用户停止/音频耗尽）。
+     *  必须在非主线程调用——Service 的 runEngine 线程专用。 */
+    fun awaitDone() {
+        try {
+            engineThread?.join()
+        } catch (_: InterruptedException) {
+            // 服务线程被 stopEngine interrupt：识别线程已被 stop() 信号终止，直接返回
+        }
     }
 
     /** VAD 构造看门狗：SileroVad 的 native 构造在个别环境（如 x86_64 模拟器 + sherpa-onnx
@@ -193,17 +210,21 @@ class CaptionEngine(private val ctx: Context) {
         onCaption?.invoke(tailShown(partial), displayText() + partial, dotLevel)
     }
 
-    /** 悬浮窗显示用：最后两段 + 当前半句（Live Caption 式） */
-    private fun tailShown(partial: String): String = synchronized(segs) {
-        val n = segs.size
-        if (n == 0) return partial
-        val start = if (n >= 2) n - 2 else 0
-        buildString {
-            for (i in start until n) {
-                append(segs[i].text)
-                append(segs[i].sep)
-            }
-        }.toString() + partial
+    /** 悬浮窗显示用：最后两段 + 当前半句（Live Caption 式）；再截到最新 40 字，
+     *  防止连续说话（VAD 不断句）时字幕条无限长占满屏幕。 */
+    private fun tailShown(partial: String): String {
+        val raw = synchronized(segs) {
+            val n = segs.size
+            if (n == 0) return partial
+            val start = if (n >= 2) n - 2 else 0
+            buildString {
+                for (i in start until n) {
+                    append(segs[i].text)
+                    append(segs[i].sep)
+                }
+            }.toString() + partial
+        }
+        return if (raw.length > 30) raw.takeLast(30) else raw
     }
 
     /** 定格一段已识别文字，末尾留分隔符（短停顿空格/长停顿换行）。返回段 id。 */

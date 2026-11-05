@@ -90,7 +90,7 @@ class ScreenService : Service() {
     private var stations: List<String> = emptyList()
     private var vibrateOn = true
     private var stayMs = 10000L
-    private var fontSp = FONT_SIZES[1]
+    private var fontSp = FONT_SIZES[0]
 
     override fun onCreate() {
         super.onCreate()
@@ -145,7 +145,7 @@ class ScreenService : Service() {
             ?: emptyList()
         vibrateOn = p.getBoolean("vibrate", true)
         stayMs = p.getLong("stay_ms", 10000L)
-        fontSp = FONT_SIZES[p.getInt("font_idx", 1).coerceIn(0, FONT_SIZES.size - 1)]
+        fontSp = FONT_SIZES[p.getInt("font_idx", 0).coerceIn(0, FONT_SIZES.size - 1)]
     }
 
     // ---------- 引擎主流程 ----------
@@ -154,11 +154,16 @@ class ScreenService : Service() {
         try {
             when (mode) {
                 "env" -> runCaptionMode(selftestWavAsset = if (selftestMode) selftestWav else null, projIntent = null)
-                "media" -> runCaptionMode(
-                    selftestWavAsset = if (selftestMode) selftestWav else null,
-                    projIntent = @Suppress("DEPRECATION") intent?.getParcelableExtra(EXTRA_PROJ_DATA),
-                    projCode = intent?.getIntExtra(EXTRA_PROJ_CODE, -1) ?: -1,
-                )
+                "media" -> {
+                    val projIntent = ProjHolder.data
+                    val projCode = ProjHolder.code
+                    Log.i(TAG, "PROJECTION_IN code=$projCode data=${projIntent != null}")
+                    runCaptionMode(
+                        selftestWavAsset = if (selftestMode) selftestWav else null,
+                        projIntent = projIntent,
+                        projCode = projCode,
+                    )
+                }
                 else -> runRideMode()
             }
         } catch (e: Exception) {
@@ -183,7 +188,8 @@ class ScreenService : Service() {
         eng.onCaption = { tail, _, _ ->
             ui.post {
                 fw.update(tail)
-                fw.scheduleHide(3000) // 3s 无更新自动淡出（每次更新重置）
+                // 静默淡出：连续字幕 5s 无更新隐藏；selftest 放宽到 15s 便于观察/截图
+                fw.scheduleHide(if (selftestMode) 15000 else 5000)
             }
         }
         eng.onError = { msg -> ui.post { toast(msg) } }
@@ -196,7 +202,7 @@ class ScreenService : Service() {
             selftestSec = ws.durationSec()
             src = ws
         } else if (mode == "media") {
-            if (projIntent == null || projCode < 0) throw IllegalStateException("缺 MediaProjection 授权")
+            if (projIntent == null) throw IllegalStateException("缺 MediaProjection 授权（code=$projCode）")
             val pm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             val proj = pm.getMediaProjection(projCode, projIntent)
             projection = proj
@@ -218,6 +224,9 @@ class ScreenService : Service() {
         val model = pickAsrEntry()
         eng.start(model, src, selftestAudioSec = selftestSec, stopAfterSec = stopAfter)
         Log.i(TAG, "CAPTION_MODE mode=$mode model=${model.id} selftest=${selftestWavAsset != null}")
+        // 引擎是异步线程：等它自然结束（用户停止/音频耗尽）再进 runEngine 的 finally 释放，
+        // 否则 finally 会立刻 stop() 掉刚启动的引擎（v0.2 首测 InterruptedException 根因）
+        eng.awaitDone()
     }
 
     /** media selftest：自播报站音频，返回播放时长（秒）。 */

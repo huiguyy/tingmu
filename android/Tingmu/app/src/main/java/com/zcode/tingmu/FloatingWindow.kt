@@ -77,6 +77,7 @@ class FloatingWindow(private val ctx: Context) {
         b.background = bg
         b.setPadding((28 * dp).toInt(), (16 * dp).toInt(), (28 * dp).toInt(), (16 * dp).toInt())
         t.textSize = fontSp
+        t.maxLines = 2
         t.setTextColor(theme.fg)
         // 宽度上限 = 屏宽 - 两侧留白；放不下时自动缩字号（单行优先）
         t.maxWidth = ctx.resources.displayMetrics.widthPixels - (48 * dp).toInt()
@@ -87,11 +88,16 @@ class FloatingWindow(private val ctx: Context) {
         }
     }
 
-    /** 命中：更新文本并浮现。 */
+    /** 命中：更新文本并浮现。最多两行：按屏宽/字号算每行容量，超长只留最新（尾部）字符。 */
     fun update(text: String) {
         ui.post {
             val b = box ?: return@post
-            tv?.text = text
+            val density = ctx.resources.displayMetrics.density
+            // 可用宽度 = 屏宽 - 两侧外边距(48dp) - 内 padding(56dp)
+            val usablePx = ctx.resources.displayMetrics.widthPixels - (104 * density).toInt()
+            val cols = (usablePx / (fontSp * density)).toInt().coerceIn(6, 60) - 1
+            val shown = if (text.length > cols * 2) text.takeLast(cols * 2) else text
+            tv?.text = shown
             b.visibility = android.view.View.VISIBLE
         }
     }
