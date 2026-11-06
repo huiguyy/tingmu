@@ -764,3 +764,79 @@ dialect: SEG_COMMIT sep=nl → SEG_BLANK → SEG_COMMIT sep=nl → 两条 SEG_CO
 4. 模拟器验证（独立 AVD tingmu35b，避开另一会话对 tingmu35 的占用；该 AVD data 分区限 4G 以防撑爆盘）：首装 selftest 正常（后台解析）、双击开始第二下提示准备中或正常启动、HOME 后无 FATAL、无 ANR。
 
 **成品 vc24/v1.9.5**：快速 76,936,796B sha `db6d504cd3e34168` / 双语 165,933,763B sha `a9508253ebbac197` / 方言 219,014,649B sha `43fb4cd0f0cbed3d`；三包模型核对；~/Downloads 换 v1.9.5；Release v1.9.5 三资产。
+
+---
+
+## 二十七、听幕·厅 hall 开工 + 预验证操作卡（2026-11-06）
+
+**用户拍板**：按 11/05 家族规划三步走；预验证与开发**并行**；拾音硬件 **USB 麦优先**。
+**探索发现**：本体 v1.9.5/vc24 与屏线 CaptionEngine 已分叉 12 处（排版/停止排空/会话防串写/拒换模型六件套未进屏线；断句参数/标点清洗/tailShown 死代码三处漂移）→ hall 开工前先合并三处纯逻辑漂移。
+
+**第 0 步 预验证操作卡（录音频 → CER，不阻塞开发）**：
+1. 用手机录三段 16kHz 或默认格式音频（微信收藏/录音机均可，回头转 16k）：
+   A. 家庭对话：3 米距离正常音量对话 1-2 分钟，**开着电视当噪声底**（核心场景）；
+   B. 医院叫号：医院大厅对喇叭录 1 分钟；
+   C. 电视节目：录一段无字幕新闻/电视剧 1 分钟。
+2. 音频发到 Mac（微信传输助手/局域网），放 `tingmu/bench/audio/farfield/`；
+3. 跑：`cd tingmu/bench && python3 <跑法照 bench/ 现有脚本>`（跑不动我接手）→ 输出 CER；
+4. 达标线：远场+噪声 CER ≤ 30%（可用）；>50%（需上 hotwords/换模型/摆位策略再裁）。
+
+---
+
+## 二十八、听幕·厅 v0.1 MVP 交付（2026-11-06，家族第三员开工即出包）
+
+**按用户三步走方案落地**（预验证并行 / USB 麦优先）。hall=电视/盒子零操作大字幕：开机自启、平时全透明触摸穿透、有人说话浮现大字、安静 8s 淡出。
+
+**工程**：
+- 第五变体 hall：`com.zcode.tingmu.hall` vc1/v0.1，`HallActivity`（launcher+LEANBACK_LAUNCHER 双 category=手机+电视桌面都可见）；build-apk.sh 版本提取改**按变体精确匹配三行**（原 head/tail 在三版本线时会拿错）；gen_icon 徽章「厅」
+- `HallActivity`（新）：大开关+字号/配色/停留(5/8/12/20s)/灵敏度(低中高=VAD 0.5/0.4/0.3)+开机自启勾选+自测；CaptionEngine 加 `vadThreshold` 可参数化；boot=true extra 直接拉服务并 finish（老人零操作）
+- `HallService`（新）：前台服务(mic type)+CaptionEngine env 路径+VAD 显隐（有语音浮现/静默 stayMs 淡出）+ACTION_REFRESH 运行中实时生效；**踩屏 v0.8 同款坑（异步 start 后 finally 秒杀引擎）→awaitDone 已补**
+- `BootReceiver`（新）：BOOT_COMPLETED→拉 HallActivity（Android 14+ 禁 BOOT 直启 mic FGS，走 Activity 中转=标准解法，SYSTEM_ALERT_WINDOW 即后台启 Activity 豁免条件）
+- **CaptionEngine 对齐本体 v1.9.5 三处漂移**：断句改真实静音累计 vadSilenceMs+endpoint 后 softPaused=true+2000ms 空行阈值；SEP_HALF="\n"/SEP_BLANK="\n\n"（String 化）；cleanAsrText 清全部中英标点+数字保护（3.14 不拆）；tailShown 死代码删除
+- **FloatingWindow 移植本体排版系统**：includeFontPadding=false+目标行高 1.30×字号+首布局实测校准 lineFix 缓存（subtitle/hist 各自校准）——屏共用件，下一版屏受益
+- **USB 麦**：MicSource 加 ctx 参数+AudioManager 枚举 USB 输入设备 `preferredDevice` 优先路由（无 USB 回落默认），听幕本体无参调用兼容
+
+**验证（模拟器）**：包信息全对（含 leanback-launchable）；hall selftest env 全链 `HALL_MODE→ENGINE_LOADED vad=true→SELFTEST_DONE rtf=0.130`，标点清洗生效（全文无标点）；双层级字幕+电视 UI（停留/灵敏度/自启勾选）截图 ✓；receiver 注册 dumpsys 实证（BOOT_COMPLETED filter 在）。
+**未复现（诚实口径）**：Android 15 phone 模拟器上 BOOT_COMPLETED 未派发给第三方 receiver（shell 注入受保护广播被拒、冷启动未触发）——真机 TV 开机行为列入真机清单第 3 项。
+
+**交付**：`听幕·厅-v0.1.apk` **54,812,358B（arm64）** sha `c088e7cba0eb9bc0`；仓库根+~/Downloads+111 `~/tingmu-dl/tingmu-hall-v0.1.apk`；公网 `https://gp.18.do/dl/tingmu-hall-v0.1.apk` 200 OK（断点续传）。
+
+**真机清单（电视侧，按台验证）**：①内置麦第三方可用性 ②TV ROM 悬浮窗授权入口（可能需 adb）③**开机自启是否被派发/被 ROM 查杀** ④遥控器 D-pad 焦点导航 ⑤USB 麦采音 ⑥远场 CER（等录音，见 §二十七操作卡）
+
+---
+
+## 二十九、v0.9（屏）/v0.2（厅）双层级丢字修复（2026-11-06，用户真机反馈"往上移两行小字移不成，老是丢了"）
+
+**根因**：`viewShown` 的小字只取"已定格的更早段"（segs[n-3..n-2]），current=最后一段全文+partial——两个丢字路径：①当前长句在大字区两行装不下的**前半部分哪都没去**（被 takeLast 直接截掉）；②连续说话无停顿（segs 单段）时小字**永远空**。
+
+**修法（语义改为"连续文本流分配"）**：CaptionEngine.onCaption 改传 `full=displayText()+partial` 全文；FloatingWindow.update(full) 按容量切——大字=最新两行容量，小字=紧贴其前的两行容量，再老丢弃。**滚出去的内容自动变小字、不丢字**。ride 的 show 站名单参同步适配。
+
+**验证（模拟器，连续 18s 单段语音=原必丢场景）**：截图实证小字区出现"各位好我们今天来测试一"（修复前此处恒空）、大字"下听目的实十字幕功能/把语音变成大字显"最新两行、层级分明 ✓。
+
+**交付（同源双包）**：`听幕·屏-v0.9.apk` 58,515,676B sha `9c976dc629f6e7ed`（vc9）；`听幕·厅-v0.2.apk` 54,812,362B sha `86ca67a7f91854a0`（vc2）；仓库根+~/Downloads+111+公网（gp.18.do/dl/ 两链接 200 OK）。**屏 v0.8/厅 v0.1 作废**。
+
+---
+
+## 三十一、v1.9.6 方言版：修复 v1.9.5 实时字幕回退——我的渲染优化引入的回归（2026-11-06）
+
+**用户报告**："方言版现在不实时出字幕了，而是一句一句地出。"（用户同时拍板：暂时只维护方言版，快速/双语停住不动。）
+
+**根因（我 v1.9.5 自己引入）**：v1.9.5 的 segsVersion 脏标记优化本意是"段集合没变就跳过全列 reconcile 省弱机 CPU"，但把「正在说」partial 的逐帧刷新也一起收进了 `if (ver != renderedSegVer)` 门控——partial 只在段落提交/纠正（版本号变化）时才刷新，流式实时感没了，变成一句一句蹦字。**教训：性能优化的门控范围必须逐项核对"门控住的是什么"，partial 刷新和全列 reconcile 是两类更新，不能一把锁。**
+
+**修法**：partial 刷新移到门控之前（MainActivity.kt 约 938-942 行）：
+```kotlin
+if (captionText.text.toString() != partial) captionText.text = partial   // 每帧都刷
+val ver = synchronized(segs) { segsVersion }
+if (ver != renderedSegVer) { ... 全列 reconcile ... }                    // 版本门控只管这个
+```
+另在 LAYOUTV 调试日志加 `plen=`（partial 长度），专用于区分"partial 在长"还是"只有段落提交"。
+
+**验证（独立 AVD tingmu35b / emulator-5557）**：开局 LAYOUTV 序列 `n=1 plen=2 → plen=4 → plen=7 → … → plen=37`，期间**零 SEG_COMMIT**——partial 持续增长即实时性恢复；随后完整 selftest 回归全绿（SEG_COMMIT×2 sep=half、SEG_CORRECT×2、SELFTEST_DONE、FATAL=0）。
+
+**构建坑（与回归无关但同轮踩）**：构建失败 `dl.google.com: nodename nor servname provided`——之前为腾磁盘删了 ~/.gradle/caches，androidx.annotation:1.8.2 需重新下载，而本机 dl.google.com/阿里云/Maven Central 实测全部 DNS 不通，**唯一可达是腾讯云镜像**（curl 200 实证）。修法：settings.gradle.kts 两处 repositories 最前加 `maven("https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")`，google()/mavenCentral() 保留兜底。此镜像配置对本机所有后续构建（含屏/厅）生效。
+
+**交付（v1.9.6，方言版独占更新）**：
+- `听幕-方言版-v1.9.6.apk` 219,014,845B sha256 `1f0430a08d22a99030557b5452183cf61487d1f4764d66842462681196216eb2`（aapt2 实证 com.zcode.tingmu.dialect vc25/1.9.6；模型内容只有 sense-voice-int8+silero_vad+small-ctc，零 kws/punct 混入）
+- ~/Downloads：方言版 v1.9.5 已删、v1.9.6 已就位（sha 双端一致）；**快速版/双语版 v1.9.5 按用户指示原样保留不动**
+- GitHub Release [v1.9.6](https://github.com/huiguyy/tingmu/releases/tag/v1.9.6)（仅方言资产 tingmu-dialect-v1.9.6.apk）；v1.9.5 release notes 已追加警告：**v1.9.5 三个变体都有此显示回归**，方言用 v1.9.6，快速/双语敏感者回 v1.9.4 或等修复版
+- 快速/双语修复代码已在共享源码里，待用户发话各重建一次即可

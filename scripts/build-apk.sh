@@ -27,19 +27,18 @@ mkdir -p "$ASSETS"
   || bash "$ROOT/scripts/fetch-models.sh"
 for d in "$ASSETS"/*/; do [ -d "$d" ] && mv "$d" "$STAGE/"; done
 
-# 输出文件名带版本号（从 build.gradle.kts 读 versionName)，避免来回覆盖分不清
-# 听幕·屏有独立版本线（if 分支在前），按变体取对应分支
-VER_RAW=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts)
-if [ "$1" = "screen" ]; then
-  VER=$(echo "$VER_RAW" | head -1 | sed 's/.*"\(.*\)"/\1/')
-else
-  VER=$(echo "$VER_RAW" | tail -1 | sed 's/.*"\(.*\)"/\1/')
-fi
+# 输出文件名带版本号：三条独立版本线（屏/厅/主线），按变体精确取第 N 个 match
+VER_LINES=$(grep -oE 'versionName = "[^"]+"' app/build.gradle.kts | sed 's/.*"\(.*\)"/\1/')
+case "${1:-}" in
+  screen) VER=$(echo "$VER_LINES" | sed -n 1p) ;;
+  hall)   VER=$(echo "$VER_LINES" | sed -n 2p) ;;
+  *)      VER=$(echo "$VER_LINES" | sed -n 3p) ;;
+esac
 echo "versionName=$VER"
 
 case "${1:-}" in
-  bilingual|fast|dialect|screen)
-    # 每个版本生成自己的 launcher 图标（徽章字 快/双/方/屏）
+  bilingual|fast|dialect|screen|hall)
+    # 每个版本生成自己的 launcher 图标（徽章字 快/双/方/屏/厅）
     python3 "$ROOT/scripts/gen_icon.py" "$1" app/src/main/res
     ;;
 esac
@@ -84,5 +83,12 @@ case "${1:-}" in
     cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕·屏-v${VER}.apk}"
     echo "== 听幕·屏已出: ${OUT:-$ROOT/听幕·屏-v${VER}.apk}"
     ;;
-  *) echo "用法: $0 bilingual|fast|dialect|screen" >&2; exit 1 ;;
+  hall)
+    # 听幕·厅：small-ctc（远场流式）+ VAD + 测试音频；开机自启+VAD 显隐，老人零操作
+    cp -r "$ROOT/models/small-ctc-zh-2025" "$ASSETS/"
+    ./gradlew :app:assembleDebug -Plite=true -Pvariant=hall ${EXTRA_ABIS:-} --no-daemon -q
+    cp app/build/outputs/apk/debug/app-debug.apk "${OUT:-$ROOT/听幕·厅-v${VER}.apk}"
+    echo "== 听幕·厅已出: ${OUT:-$ROOT/听幕·厅-v${VER}.apk}"
+    ;;
+  *) echo "用法: $0 bilingual|fast|dialect|screen|hall" >&2; exit 1 ;;
 esac

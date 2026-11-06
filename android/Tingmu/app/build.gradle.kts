@@ -8,18 +8,20 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // -Pvariant=fast|bilingual|dialect|screen：不同 applicationId + 不同应用名，多个版本可在同一手机共存
+        // -Pvariant=fast|bilingual|dialect|screen|hall：不同 applicationId + 不同应用名，多版本同机共存
         val variant = (project.findProperty("variant") as? String) ?: "fast"
         applicationId = when (variant) {
             "bilingual" -> "com.zcode.tingmu.bilingual"
             "dialect" -> "com.zcode.tingmu.dialect"
             "screen" -> "com.zcode.tingmu.screen"
+            "hall" -> "com.zcode.tingmu.hall"
             else -> "com.zcode.tingmu.fast"
         }
         resValue("string", "app_name", when (variant) {
             "bilingual" -> "听幕双语版"
             "dialect" -> "听幕方言版"
             "screen" -> "听幕·屏"
+            "hall" -> "听幕·厅"
             else -> "听幕快速版"
         })
         // 各变体首选的模型（defaultModel 读取）：方言版默认离线方言模型，内置的流式小模型只做第一遍
@@ -28,17 +30,27 @@ android {
             "dialect" -> "sense"
             else -> "small"
         })
-        // 听幕·屏 = 独立产品（悬浮字幕+KWS 哨兵），launcher 指向自己的 Activity；版本线独立起步
-        manifestPlaceholders["launcherActivity"] =
-            if (variant == "screen") ".ScreenActivity" else ".MainActivity"
+        // 屏/厅 = 独立产品，launcher 各自指向；版本线各自独立起步
+        manifestPlaceholders["launcherActivity"] = when (variant) {
+            "screen" -> ".ScreenActivity"
+            "hall" -> ".HallActivity"
+            else -> ".MainActivity"
+        }
         minSdk = 24
         targetSdk = 35
-        if (variant == "screen") {
-            versionCode = 8
-            versionName = "0.8"
-        } else {
-            versionCode = 24
-            versionName = "1.9.5"
+        when (variant) {
+            "screen" -> {
+                versionCode = 9
+                versionName = "0.9"
+            }
+            "hall" -> {
+                versionCode = 2
+                versionName = "0.2"
+            }
+            else -> {
+                versionCode = 25
+                versionName = "1.9.6"
+            }
         }
         ndk {
             // 手机发布只含 ARM；模拟器构建用 -PextraAbis=x86_64 追加

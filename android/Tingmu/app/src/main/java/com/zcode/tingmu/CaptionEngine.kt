@@ -19,16 +19,21 @@ import kotlin.math.sqrt
 class CaptionEngine(private val ctx: Context) {
     companion object {
         const val TAG = "TingmuScreen"
+
+        /** 短停顿（≥0.6s）：自然换行；长停顿（>2s）：空一行（对齐本体 v1.9.5 语义） */
+        const val SEP_HALF = "\n"
+        const val SEP_BLANK = "\n\n"
     }
 
     private val running = AtomicBoolean(false)
     private val cancelFlag = AtomicBoolean(false)
     private var engineThread: Thread? = null
 
-    private class Seg(val id: Long, var text: String, var sep: Char)
+    private class Seg(val id: Long, var text: String, var sep: String)
     private val segs = ArrayList<Seg>()
     private var nextSegId = 0L
     private var lastVoiceMs = 0L
+    private var vadSilenceMs = 0L
     private var softPaused = false
     private var decodeMsSum = 0.0
     private var decodeCalls = 0L
@@ -37,8 +42,13 @@ class CaptionEngine(private val ctx: Context) {
     var currentModelId: String? = null
         private set
 
-    /** 每 chunk 回调（引擎线程）：history=滚上去的历史小字句，current=当前大字内容，lvl=EMA 电平 */
-    var onCaption: ((history: String, current: String, lvl: Float) -> Unit)? = null
+    /** VAD 说话判定阈值（厅版设置项：低灵敏度=0.5 只认大声，高灵敏度=0.3 弱声也认） */
+    var vadThreshold = 0.4f
+
+    /** 每 chunk 回调（引擎线程）：full=全部文本（含段落分隔符），lvl=EMA 电平。
+     *  大字/小字两级的分配由 FloatingWindow 按容量切（它才知道字号与屏宽），
+     *  语义=大字显示最新两行、紧贴其前的内容滚上去变小字、再老的丢弃——永不丢字。 */
+    var onCaption: ((full: String, lvl: Float) -> Unit)? = null
     /** selftest 收尾（音频源耗尽或 stopAfterSec 到点） */
     var onSelftestDone: ((rtf: Float, text: String) -> Unit)? = null
     var onError: ((String) -> Unit)? = null
@@ -185,72 +195,36 @@ class CaptionEngine(private val ctx: Context) {
             maxDecodeMs = max(maxDecodeMs, ms)
         }
         val now = SystemClock.elapsedRealtime()
-        if (lvl > 0.4f) {
+        if (lvl > vadThreshold) {
             lastVoiceMs = now
+            vadSilenceMs = 0
             softPaused = false
+        } else {
+            // 对齐本体 v1.9.5：真实静音按音频时长累计，不因模型端点重置（否则 >2s 永远到不了）
+            vadSilenceMs += chunk.size * 1000L / 16000
         }
-        val gapMs = now - lastVoiceMs
         val text = cleanAsrText(rec.getResult(st).text)
         var partial = text
         if (rec.isEndpoint(st)) {
-            if (text.isNotBlank()) commitSegment(text, sepFor(gapMs))
+            if (text.isNotBlank()) commitSegment(text, sepFor(vadSilenceMs))
             rec.reset(st)
             lastVoiceMs = now
-            softPaused = false
-            partial = ""
-        } else if (!softPaused && gapMs > 600 && text.isNotBlank()) {
             softPaused = true
-            commitSegment(text, sepFor(gapMs))
+            partial = ""
+        } else if (!softPaused && vadSilenceMs >= 600 && text.isNotBlank()) {
+            softPaused = true
+            commitSegment(text, sepFor(vadSilenceMs))
             rec.reset(st)
             partial = ""
-        } else if (softPaused && gapMs > 2500) {
+        } else if (softPaused && vadSilenceMs > 2000) {
             upgradeLastSep()
         }
         dotLevel = dotLevel * 0.55f + lvl * 0.45f
-        val (hist, cur) = viewShown(partial)
-        onCaption?.invoke(hist, cur, dotLevel)
-    }
-
-    /** 两级字幕：current=最后一段+当前半句（大字区）；history=再往前两段（小字区，滚上去的历史）。
-     *  真实长度截断由 FloatingWindow 按字号/屏宽做（它才知道容量）。 */
-    private fun viewShown(partial: String): Pair<String, String> = synchronized(segs) {
-        val n = segs.size
-        val current = if (n == 0) {
-            partial
-        } else {
-            buildString {
-                append(segs[n - 1].text)
-                append(' ')
-            } + partial
-        }
-        val hist = buildString {
-            for (i in max(0, n - 3) until (n - 1)) {
-                append(segs[i].text)
-                append(' ')
-            }
-        }
-        hist.trim() to current.trim()
-    }
-
-    /** 悬浮窗显示用：最后两段 + 当前半句（Live Caption 式）；再截到最新 40 字，
-     *  防止连续说话（VAD 不断句）时字幕条无限长占满屏幕。 */
-    private fun tailShown(partial: String): String {
-        val raw = synchronized(segs) {
-            val n = segs.size
-            if (n == 0) return partial
-            val start = if (n >= 2) n - 2 else 0
-            buildString {
-                for (i in start until n) {
-                    append(segs[i].text)
-                    append(segs[i].sep)
-                }
-            }.toString() + partial
-        }
-        return if (raw.length > 30) raw.takeLast(30) else raw
+        onCaption?.invoke(displayText() + partial, dotLevel)
     }
 
     /** 定格一段已识别文字，末尾留分隔符（短停顿空格/长停顿换行）。返回段 id。 */
-    private fun commitSegment(text: String, sep: Char): Long {
+    private fun commitSegment(text: String, sep: String): Long {
         val id = synchronized(segs) {
             val id = nextSegId++
             segs.add(Seg(id, text, sep))
@@ -261,14 +235,14 @@ class CaptionEngine(private val ctx: Context) {
             }
             id
         }
-        Log.i(TAG, "SEG_COMMIT sep=" + (if (sep == '\n') "\\n" else "space") + " text=" + text)
+        Log.i(TAG, "SEG_COMMIT sep=" + sep.replace("\n", "\\n") + " text=" + text)
         return id
     }
 
     private fun upgradeLastSep() {
         synchronized(segs) {
             val last = segs.lastOrNull() ?: return
-            if (last.sep == ' ') last.sep = '\n'
+            if (last.sep == SEP_HALF) last.sep = SEP_BLANK
         }
     }
 
@@ -282,15 +256,24 @@ class CaptionEngine(private val ctx: Context) {
         }
     }
 
-    private fun sepFor(gapMs: Long) = if (gapMs > 2500) '\n' else ' '
+    private fun sepFor(gapMs: Long) = if (gapMs > 2000) SEP_BLANK else SEP_HALF
+
+    // 对齐本体 v1.9.5 产品规则：不显示任何标点，标点位置换空格；英文句点数字保护（"3.14" 不拆）
+    private val PUNCT_CJK = Regex("[，。！？；：、（）【】《》〈〉「」『』“”‘’…—～·]")
+    private val PUNCT_ASCII = Regex("(?<![0-9])[,.!?;:](?![0-9])")
 
     private fun cleanAsrText(t: String): String =
-        t.replace("<unk>", "").replace("<UNK>", "").replace(Regex(" {2,}"), " ")
+        t.replace("<unk>", "").replace("<UNK>", "")
+            .replace(PUNCT_CJK, " ")
+            .replace(PUNCT_ASCII, " ")
+            .replace(Regex(" {2,}"), " ")
+            .trim()
 
     fun clearText() {
         synchronized(segs) { segs.clear() }
         nextSegId = 0
         lastVoiceMs = 0L
+        vadSilenceMs = 0L
         softPaused = false
         decodeMsSum = 0.0
         decodeCalls = 0L

@@ -28,7 +28,3 @@ bench/audio/mixed_zh_en.wav
 
 __pycache__/
 *.pyc
-android/libs/
-
-# Kotlin 构建错误日志
-android/Tingmu/.kotlin/

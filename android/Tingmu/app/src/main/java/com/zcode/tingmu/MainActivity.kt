@@ -935,7 +935,9 @@ class MainActivity : Activity() {
         dotLevel = dotLevel * 0.55f + level * 0.45f
         liveDot.alpha = 0.15f + min(1f, max(0f, dotLevel)) * 0.85f
         // 每段一个 TextView：短停顿=正常行距（不加上边距），长停顿=隔一行（加约 0.7 字号的边距）。
-        // 段集合没变就只刷"正在说"的 partial，不做全列 diff（弱机省 CPU）。
+        // partial（正在说）每帧都刷；已定格段集合没变时才做全列 reconcile（弱机省 CPU）。
+        // "正在说"的实时文字每帧都要刷（这正是流式实时感所在），只有全列 reconcile 才按版本门控
+        if (captionText.text.toString() != partial) captionText.text = partial
         val ver = synchronized(segs) { segsVersion }
         if (ver != renderedSegVer) {
         renderedSegVer = ver
@@ -963,7 +965,6 @@ class MainActivity : Activity() {
         for (id in segViews.keys.filter { it !in ids }) {
             segViews.remove(id)?.let { captionColumn.removeView(it) }
         }
-        if (captionText.text.toString() != partial) captionText.text = partial
         val plp = (captionText.layoutParams as? LinearLayout.LayoutParams)
             ?: LinearLayout.LayoutParams(-1, -2)
         val pWant = if (snap.isEmpty()) 0 else gapPx(snap.last().sep)
@@ -984,7 +985,7 @@ class MainActivity : Activity() {
                         val pitch = if (lay != null && lay.lineCount > 1) (lay.getLineTop(1) - lay.getLineTop(0)).toString() else "-"
                         v.top.toString() + ":" + v.bottom + "/p" + pitch
                     }
-                    Log.i(TAG, "LAYOUTV n=" + captionColumn.childCount + " " + parts.joinToString(","))
+                    Log.i(TAG, "LAYOUTV n=" + captionColumn.childCount + " plen=" + partial.length + " " + parts.joinToString(","))
                 }
             }
         }

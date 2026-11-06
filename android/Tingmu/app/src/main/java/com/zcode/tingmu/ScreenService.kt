@@ -218,9 +218,9 @@ class ScreenService : Service() {
     private fun runCaptionMode(selftestWavAsset: String?, projIntent: Intent?, projCode: Int = -1) {
         val eng = CaptionEngine(this)
         caption = eng
-        eng.onCaption = { history, current, _ ->
+        eng.onCaption = { full, _ ->
             ui.post {
-                fw.update(history, current)
+                fw.update(full)
                 // 静默淡出：连续字幕 5s 无更新隐藏；selftest 放宽到 15s 便于观察/截图
                 fw.scheduleHide(if (selftestMode) 15000 else 5000)
             }
@@ -455,7 +455,7 @@ class ScreenService : Service() {
     private fun show(text: String, stay: Long) {
         ui.post {
             // ride 模式只显示站名：无历史层
-            fw.update("", text)
+            fw.update(text)
             fw.scheduleHide(stay)
         }
         if (vibrateOn) vibrate()

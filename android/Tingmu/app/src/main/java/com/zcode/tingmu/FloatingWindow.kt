@@ -219,11 +219,45 @@ class FloatingWindow(private val ctx: Context) {
         val small = fontSp * 0.62f
         t.textSize = fontSp
         t.setTextColor(theme.fg)
-        t.setLineSpacing((5 * dp).toFloat(), 1.18f)
         h.textSize = small
         h.setTextColor((theme.fg and 0x00FFFFFF) or 0xB3000000.toInt())
         h.alpha = 0.7f
-        h.setLineSpacing((2 * dp).toFloat(), 1.15f)
+        // 排版系统（移植本体 v1.9.x applyLineSpacing）：includeFontPadding=false +
+        // 目标行高 1.30×字号，中文字形走回退字体量不准，等首次真实布局（≥2 行）
+        // 按实测行距校准一次存 lineFix，同字号复用——老人大字场景的核心可读性
+        applyLineSpacing(t)
+        applyLineSpacing(h)
+    }
+
+    /** 字号 → lineSpacingExtra 校准值（每个字号只校准一次） */
+    private val lineFix = HashMap<Float, Float>()
+
+    private fun applyLineSpacing(tv: TextView) {
+        tv.includeFontPadding = false // 去掉字体自带上下留白，行高才等于设定值
+        val size = tv.textSize
+        val fix = lineFix[size]
+        if (fix != null) {
+            tv.setLineSpacing(fix, 1f)
+            return
+        }
+        tv.setLineSpacing(0f, 1f)
+        tv.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View, left: Int, top: Int, right: Int, bottom: Int,
+                oldLeft: Int, oldTop: Int, oldRight: Int, oldBottom: Int,
+            ) {
+                tv.removeOnLayoutChangeListener(this)
+                if (lineFix.containsKey(size)) return
+                val lay = tv.layout ?: return
+                if (lay.lineCount < 2) return
+                val actual = (lay.getLineTop(1) - lay.getLineTop(0)).toFloat()
+                val want = size * 1.30f
+                val delta = want - actual
+                android.util.Log.i("TingmuScreen", "TYPESET size=$size actual=$actual want=$want delta=$delta")
+                lineFix[size] = delta
+                tv.setLineSpacing(delta, 1f)
+            }
+        })
     }
 
     /** 运行中改字号（设置页 A+/A- 经 Service ACTION_REFRESH 调进来，实时生效） */
@@ -305,12 +339,13 @@ class FloatingWindow(private val ctx: Context) {
 
     // ---------- 字幕更新 ----------
 
-    /** 大字 current 最多两行（尾部对齐），小字 history 最多两行。
+    /** 连续文本流两级分配：大字=最新两行容量；小字=紧贴其前的两行容量（滚上去变小字）；
+     *  再老的丢弃。之前的"hist 只取已定格旧段"会让长句滚出部分直接丢失——本算法不丢字。
      *  无内容时窗口隐藏并触摸穿透（定宽空框不能挡住底下 App 的点击）。 */
-    fun update(history: String, current: String) {
+    fun update(full: String) {
         ui.post {
             val b = box ?: return@post
-            if (current.isBlank() && history.isBlank()) {
+            if (full.isBlank()) {
                 tv?.text = ""
                 histText?.text = ""
                 setVisible(false)
@@ -321,8 +356,14 @@ class FloatingWindow(private val ctx: Context) {
             val colsBig = (usablePx / (fontSp * density)).toInt().coerceIn(6, 60) - 1
             val smallSp = fontSp * 0.62f
             val colsSmall = (usablePx / (smallSp * density)).toInt().coerceIn(8, 80) - 1
-            val cur = if (current.length > colsBig * 2) current.takeLast(colsBig * 2) else current
-            val hist = if (history.length > colsSmall * 2) history.takeLast(colsSmall * 2) else history
+            val bigCap = colsBig * 2
+            val smallCap = colsSmall * 2
+            val cur = if (full.length > bigCap) full.takeLast(bigCap) else full
+            // 滚出大字区的部分进入小字区（取其尾部两行容量）
+            val hist = if (full.length > bigCap) {
+                val over = full.dropLast(bigCap)
+                if (over.length > smallCap) over.takeLast(smallCap) else over
+            } else ""
             tv?.text = cur
             val h = histText
             if (h != null) {

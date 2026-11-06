@@ -1,5 +1,8 @@
 package com.zcode.tingmu
 
+import android.content.Context
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -17,7 +20,7 @@ interface AudioSource {
 
 const val CHUNK = 1600
 
-class MicSource : AudioSource {
+class MicSource(private val ctx: Context? = null) : AudioSource {
     private var rec: AudioRecord? = null
 
     override fun open(): Boolean {
@@ -30,6 +33,18 @@ class MicSource : AudioSource {
             max(minBuf * 2, CHUNK * 2 * 4)
         )
         if (r.state != AudioRecord.STATE_INITIALIZED) return false
+        // USB 麦优先路由（厅=电视/盒子普遍无内置麦）：枚举已插入的 USB 音频输入设备，
+        // 找到就 setPreferredDevice；找不到回落系统默认（手机内置麦/带麦盒子）
+        if (ctx != null) {
+            try {
+                val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val usb = am.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+                    it.type == AudioDeviceInfo.TYPE_USB_DEVICE || it.type == AudioDeviceInfo.TYPE_USB_HEADSET
+                }
+                if (usb != null) r.preferredDevice = usb
+            } catch (_: Exception) {
+            }
+        }
         r.startRecording()
         rec = r
         return true
