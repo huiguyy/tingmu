@@ -1,0 +1,17 @@
+听幕 Tingmu
+Copyright (c) 2026 huiguyy
+
+This product bundles third-party components that remain under their own
+licenses:
+
+- sherpa-onnx AAR (on-device ASR / VAD runtime)
+- The ASR / VAD models shipped inside the app
+
+See the upstream sherpa-onnx release pages for the applicable licenses and
+source availability.
+
+————————————————————————————
+
+第三方组件说明：本应用内置的 sherpa-onnx AAR（端侧 ASR / VAD 运行时）以及
+随包分发的 ASR / VAD 模型，仍遵循其各自的开源许可；相关授权与源码获取方式
+请见 sherpa-onnx 上游发布页。
